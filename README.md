@@ -3,19 +3,13 @@
 **USB Window, Output & Terminal for M8.**
 
 Mirrors a [Dirtywave M8](https://dirtywave.com/) tracker's screen and forwards
-keyboard input back to it over the M8's USB serial connection. Two frontends
-share one client:
+keyboard input back to it over the M8's USB serial connection. Two frontends are available:
 
 - **`uwot-m8`** — a window, pixel-for-pixel with the device.
-- **`uwot-tui`** — the same screen as text in your terminal, in colour.
-
-Both draw the M8's face buttons below its screen, lit as you press them, and
-both open a settings menu with Escape. The app can also play the M8's own audio
-through your computer, send MIDI control changes from bound keys, and be driven
-from a game controller.
+- **`uwot-tui`** — the same screen as text in your terminal.
 
 Built for the M8 Model:02 (480x320 display); Model:01 and headless builds work
-too, since the device reports its own model.
+in theory, but I do not have those and have not tested it.
 
 ## Platforms
 
@@ -23,11 +17,7 @@ too, since the device reports its own model.
 |---|---|---|
 | Linux | yes | yes |
 | macOS | yes | yes |
-| Windows | yes | no |
-
-The terminal frontend needs raw mode, the kitty keyboard protocol and a signal
-handler to restore the terminal, none of which a Windows console provides; there
-it builds as a stub pointing you at the window.
+| Windows | untested | no |
 
 ## Installing
 
@@ -41,10 +31,8 @@ sudo apt install build-essential pkg-config libudev-dev libasound2-dev libsdl2-d
 packaging/install.sh          # into ~/.local, or set PREFIX=
 ```
 
-That builds both frontends in release mode, installs them to `~/.local/bin`,
-drops the icon into the hicolor theme, and writes `uwot-m8.desktop` with an
-absolute `Exec` (a launcher need not share your `PATH`). Its `StartupWMClass` is
-`uwot-m8`, the class SDL gives the window, so compositors match the two up.
+That installs both frontends to `~/.local/bin`, and sets up a .desktop file
+for you.
 
 ### macOS
 
@@ -71,8 +59,6 @@ That builds `uwot-m8`, copies it to `%LOCALAPPDATA%\Programs\uwot-m8` and makes
 a Start Menu shortcut. Without cmake it links against an SDL2 you provide, and
 `SDL2.dll` must sit next to the executable or on your `PATH`.
 
-The M8 needs no driver on Windows 10 or later.
-
 ### From source
 
 ```sh
@@ -85,8 +71,9 @@ Binaries land in `target/release/`.
 
 ## Device permissions
 
-Linux only: the M8's serial port is `root:dialout`, so a plain user cannot open
-it. Install the bundled udev rule, which hands access to whoever is logged in on
+Linux only: you dont need to worry about this if you use the install script. 
+The M8's serial port is `root:dialout`, so a plain user cannot open it. 
+Install the bundled udev rule, which hands access to whoever is logged in on
 the local seat:
 
 ```sh
@@ -128,18 +115,7 @@ the terminal must be at least that big. Colour depth comes from
 The M8 is a USB audio interface as well as a serial device, so its headphone mix
 arrives as an ordinary capture device. **Audio** in the settings plays it through
 your default output. Off by default: many setups already route the M8 to an
-interface or mixer, and hearing it twice is worse than not hearing it here.
-
-Which capture device that is depends on the machine, so hosts are tried in order
-— PipeWire, PulseAudio, CoreAudio, WASAPI, ALSA — and the first giving working
-streams wins. On a desktop the sound server holds the M8's own ALSA device, so
-going underneath it only finds it busy; asking the server for it by name works.
-If the M8 is not plugged in yet, the setting stays on and audio starts when it
-appears.
-
-The two ends run off different clocks, so the buffer would otherwise creep full
-or empty. It aims to keep 30 ms buffered, plays silence below that while it
-fills, and drops frames above 120 ms to catch up.
+interface or mixer, and hearing it twice is worse than not hearing it at all imo.
 
 ## MIDI control changes
 
@@ -177,10 +153,6 @@ sweep. Both land exactly on `from` and `to`.
 Ramps run off the frontend's own loop, and only changed values are sent, so a
 slow ramp does not flood the port with repeats.
 
-`F1` upwards are the obvious bindings, since nothing on the M8 wants them. On a
-controller, the buttons the M8 does not use — left shoulder, triggers, thumbs —
-are free for the same job.
-
 ## Controllers
 
 A game controller works with no setting-up. Its buttons are bound by name like
@@ -194,16 +166,6 @@ any key, so the d-pad and four face buttons press M8 buttons out of the box:
 | West (`X` / square) | SELECT (shift) |
 | South (`A` / cross) | START (play) |
 | Right shoulder | OPTION+EDIT (delete) |
-
-The face buttons sit where the M8's own four do — Option top left, Edit top
-right, Shift bottom left, Play bottom right — and are named by position, since
-the printed labels differ between makes. A controller drives the settings menu
-too: d-pad to move, South to activate, East to go back.
-
-Devices the mapping database does not recognise still work: their buttons are
-named by platform code (`PadBtn0x130`), which the `--pads` probe below reports.
-Their axes only steer once seen near the middle, so a throttle or pedal resting
-at one end of its travel does not hold a direction down from startup.
 
 ## Settings
 
@@ -220,9 +182,6 @@ Settings
   Buttons    >            a page: which key presses which M8 button
   MIDI       no port      a page: the MIDI port, and the eight CC bindings
 ```
-
-It is a stack of pages rather than one list, because a terminal is commonly
-twenty-four rows tall and the bindings and CC slots run far longer than that.
 
 Changes save as they are made, to `~/.config/uwot-m8/config.conf`
 (`%APPDATA%\uwot-m8\config.conf` on Windows), shared by both frontends:
@@ -245,13 +204,6 @@ cc2 = key=none, channel=1, controller=1, shape=static, trigger=oneshot, from=0, 
 ...
 ```
 
-A broken line costs you that setting rather than the whole file; a broken field
-costs you that field.
-
-`theme = terminal` leaves your terminal's own foreground and background alone and
-shows the M8's highlights as reverse video. `uwot-tui` only — the window always
-uses the device's colours.
-
 ### Rebinding keys
 
 The **Buttons** page lists every M8 button, and each CC slot has its own **Key**
@@ -259,14 +211,6 @@ row. Select one, press Enter, then press the key or controller button you want i
 on; Escape cancels. Binding takes that key off whatever else had it, so one key
 never both presses a button and sends a control change. "Reset keys" puts the
 buttons back.
-
-Keys are stored by name, so one config file serves both frontends despite their
-different key types. A name is a single character (`z`), a spelled-out key (`Up`,
-`Space`, `Backspace`, `LeftShift`, `F1`) or a controller button (`PadSouth`,
-`PadUp`, `PadR1`); comma-separate to bind several to one button. Modifier names
-like `LeftShift` only reach the windowed frontend — terminals don't report
-modifiers as keys in their own right, which is why `uwot-tui` offers them as
-chords instead.
 
 Rebinding covers the M8's buttons and the CC slots. The app's own keys — Escape
 for settings, Tab for keyjazz, Ctrl+Q to quit — are fixed.
@@ -304,8 +248,8 @@ single steps), since terminals can't be relied on for the keypad.
 
 ### Keyjazz
 
-Tab toggles keyjazz, turning the keyboard into a piano playing notes on the M8's
-current instrument. The title bar shows octave and velocity while it is on.
+Tab toggles keyjazz, turning the keyboard into a midi controller sending notes
+to the m8.
 
 | Key                                   | Note                     |
 |---------------------------------------|--------------------------|
