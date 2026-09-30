@@ -303,7 +303,8 @@ uwot-probe --pads 10      # name every controller button and direction for 10s
 
 ## Licence
 
-MIT, see [LICENSE](LICENSE), which also carries the notice for the fonts.
+MIT, see [LICENSE](LICENSE). [NOTICE](NOTICE) carries the terms for the
+bitmap fonts, which are compiled into both binaries.
 
 ## Credits
 

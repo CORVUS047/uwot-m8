@@ -84,7 +84,7 @@ jobs:
         run: |
           name="uwot-m8-${{ github.ref_name }}-${{ matrix.target }}"
           mkdir -p "stage/$name"
-          cp README.md LICENSE packaging/INSTALL.txt "stage/$name/"
+          cp README.md LICENSE NOTICE packaging/INSTALL.txt "stage/$name/"
           if [ "$RUNNER_OS" = Windows ]; then
             cp target/release/uwot-m8.exe "stage/$name/"
           else
