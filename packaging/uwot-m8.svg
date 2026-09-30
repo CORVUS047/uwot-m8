@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>M8 Display</title>
+  <rect width="64" height="64" rx="10" fill="#14161b"/>
+  <rect x="6" y="6" width="52" height="52" rx="6" fill="#0a0b0e" stroke="#2b3038" stroke-width="2"/>
+  <!-- Oscilloscope trace along the top, as the device draws it. -->
+  <polyline points="11,20 15,20 17,14 19,26 21,20 25,20 27,15 29,25 31,20 35,20 37,16 39,24 41,20 53,20"
+            fill="none" stroke="#3fd6a4" stroke-width="2" stroke-linejoin="round"/>
+  <!-- Tracker text, in the spirit of the M8's own grid. -->
+  <text x="32" y="47" font-family="monospace" font-size="22" font-weight="bold"
+        text-anchor="middle" fill="#e8ecf2">M8</text>
+</svg>

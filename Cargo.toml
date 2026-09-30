@@ -1,0 +1,46 @@
+[package]
+name = "uwot-m8"
+version = "0.1.0"
+edition = "2021"
+description = "Display and control a Dirtywave M8 over USB serial"
+
+[lib]
+name = "uwot_m8"
+path = "src/lib.rs"
+
+[[bin]]
+name = "uwot-m8"
+path = "src/main.rs"
+required-features = ["gui"]
+
+[[bin]]
+name = "uwot-tui"
+path = "src/bin/uwot-tui.rs"
+
+[features]
+default = ["gui"]
+gui = ["sdl2"]
+# Builds SDL2 from source and links it in, so the windowed frontend needs no
+# SDL2 installed alongside it. Wanted on Windows, where there is no package
+# manager to get SDL2 from; needs cmake and a C compiler to build.
+bundled-sdl = ["sdl2/bundled", "sdl2/static-link"]
+
+[dependencies]
+libc = "0.2"
+serialport = "4.7"
+sdl2 = { version = "0.37", optional = true }
+cpal = "0.18.2"
+midir = "0.11.0"
+ringbuf = "0.5.2"
+gilrs = "0.11.2"
+
+# On a desktop the M8's capture device is normally held by the sound server, so
+# going straight to ALSA finds it busy. cpal's PulseAudio host talks the
+# protocol that both PulseAudio and PipeWire serve, and is pure Rust, so it
+# costs the build nothing but a crate.
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd"))'.dependencies]
+cpal = { version = "0.18.2", features = ["pulseaudio"] }
+
+[profile.release]
+opt-level = 3
+lto = true

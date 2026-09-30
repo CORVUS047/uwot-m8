@@ -1,0 +1,5 @@
+# Dirtywave M8 (Teensy-based USB serial device).
+# Grants the user on the active local seat read/write access to the M8's
+# serial port, so m8-display can run without being in the dialout group.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="048a", TAG+="uaccess"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="048b", TAG+="uaccess"

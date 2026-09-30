@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=uwot-m8
+GenericName=Tracker Display
+Comment=Show a Dirtywave M8's display and control it from the keyboard
+Exec=uwot-m8
+Icon=uwot-m8
+Terminal=false
+Categories=AudioVideo;Audio;Music;
+Keywords=m8;dirtywave;tracker;chiptune;
+StartupNotify=false
+StartupWMClass=uwot-m8
