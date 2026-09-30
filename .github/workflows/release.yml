@@ -10,6 +10,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # SDL2's bundled source asks for a cmake older than 4 will work with, and the
+  # runners have 4. This is cmake's own escape hatch for exactly that.
+  CMAKE_POLICY_VERSION_MINIMUM: "3.5"
 
 jobs:
   # A tag that disagrees with Cargo.toml ships a binary that reports the wrong

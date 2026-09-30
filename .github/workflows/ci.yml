@@ -15,6 +15,9 @@ env:
   CARGO_TERM_COLOR: always
   # Nothing here is a debugger's build; the symbols are just bytes to move.
   CARGO_PROFILE_DEV_DEBUG: 0
+  # SDL2's bundled source asks for a cmake older than 4 will work with, and the
+  # runners have 4. This is cmake's own escape hatch for exactly that.
+  CMAKE_POLICY_VERSION_MINIMUM: "3.5"
 
 jobs:
   format:
