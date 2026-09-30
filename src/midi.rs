@@ -12,8 +12,13 @@ const PREFERRED: &str = "m8";
 
 /// Every MIDI output the system currently offers, in the order it offers them.
 pub fn ports() -> Vec<String> {
-    let Ok(midi) = MidiOutput::new(CLIENT) else { return Vec::new() };
-    midi.ports().iter().filter_map(|port| midi.port_name(port).ok()).collect()
+    let Ok(midi) = MidiOutput::new(CLIENT) else {
+        return Vec::new();
+    };
+    midi.ports()
+        .iter()
+        .filter_map(|port| midi.port_name(port).ok())
+        .collect()
 }
 
 /// The port a fresh config should use: the M8's own if it is there.
@@ -48,13 +53,20 @@ impl Port {
         let found = named
             .iter()
             .find(|(_, name)| *name == wanted)
-            .or_else(|| named.iter().find(|(_, name)| name.to_lowercase().contains(&needle)))
+            .or_else(|| {
+                named
+                    .iter()
+                    .find(|(_, name)| name.to_lowercase().contains(&needle))
+            })
             .ok_or_else(|| format!("no MIDI port matching {wanted}"))?;
 
         let connection = midi
             .connect(&ports[found.0], CLIENT)
             .map_err(|e| format!("cannot open MIDI port {}: {e}", found.1))?;
-        Ok(Self { connection: Some(connection), wanted: wanted.to_string() })
+        Ok(Self {
+            connection: Some(connection),
+            wanted: wanted.to_string(),
+        })
     }
 
     pub fn is_open(&self) -> bool {

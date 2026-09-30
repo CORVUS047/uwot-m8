@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
-    Device, FromSample, Host, HostId, SampleFormat, SizedSample, Stream, StreamConfig,
-    SupportedStreamConfig, I24, U24,
+    BufferSize, Device, FromSample, Host, HostId, SampleFormat, SizedSample, Stream, StreamConfig,
+    SupportedBufferSize, SupportedStreamConfig, I24, U24,
 };
 use ringbuf::traits::{Consumer, Observer, Producer, Split};
 use ringbuf::HeapRb;
@@ -17,6 +17,13 @@ const DEVICE_NEEDLE: &str = "m8";
 const MONITOR_NEEDLE: &str = "monitor";
 
 const CHANNELS: usize = 2;
+
+/// One callback's worth of audio.
+///
+/// Left to itself a sound server sizes these for a music player, not a monitor:
+/// PulseAudio's default is "something like 2s", which is where the seconds of
+/// delay and, once the ring overflowed, the chop came from. So we ask.
+const PERIOD: Duration = Duration::from_millis(10);
 
 /// Enough to ride out a scheduling hiccup, little enough not to be heard.
 const TARGET_LATENCY: Duration = Duration::from_millis(30);
@@ -43,8 +50,12 @@ impl Audio {
 
         let mut last_error = None;
         for id in hosts {
-            let Ok(host) = cpal::host_from_id(id) else { continue };
-            let Some(output) = host.default_output_device() else { continue };
+            let Ok(host) = cpal::host_from_id(id) else {
+                continue;
+            };
+            let Some(output) = host.default_output_device() else {
+                continue;
+            };
             for input in m8_inputs(&host) {
                 match Self::connect(&input, &output, id) {
                     Ok(audio) => return Ok(audio),
@@ -60,15 +71,27 @@ impl Audio {
         let rate = in_config.sample_rate();
         let out_config = output_config(output, rate)?;
 
-        let frames = |duration: Duration| (rate as f32 * duration.as_secs_f32()) as usize;
-        let ring = HeapRb::<f32>::new(frames(CAPACITY) * CHANNELS);
-        let (mut producer, mut consumer) = ring.split();
-
+        let frames = |duration: Duration| frames_at(rate, duration);
         let in_channels = in_config.channels() as usize;
         let out_channels = out_config.channels() as usize;
         let out_rate = out_config.sample_rate();
-        let target = frames(TARGET_LATENCY) * CHANNELS;
-        let ceiling = frames(MAX_LATENCY) * CHANNELS;
+
+        let in_period = period(&in_config);
+        let out_period = period(&out_config);
+
+        // What one output callback eats, counted in input frames, plus the
+        // capture chunk that refills it. Playing cannot start on less than this
+        // or the very first callback runs dry.
+        let out_frames = out_period.unwrap_or_else(|| frames_at(out_rate, PERIOD) as u32) as f64
+            * rate as f64
+            / out_rate.max(1) as f64;
+        let one_pass = out_frames.ceil() as usize
+            + in_period.unwrap_or_else(|| frames(PERIOD) as u32) as usize;
+
+        let target = frames(TARGET_LATENCY).max(one_pass) * CHANNELS;
+        let ceiling = frames(MAX_LATENCY).max(target / CHANNELS + one_pass) * CHANNELS;
+        let ring = HeapRb::<f32>::new(frames(CAPACITY).max(ceiling / CHANNELS * 2) * CHANNELS);
+        let (mut producer, mut consumer) = ring.split();
 
         let failed = Arc::new(AtomicBool::new(false));
         let input_failed = Arc::clone(&failed);
@@ -77,11 +100,17 @@ impl Audio {
         let mut capture = move |frame: [f32; CHANNELS]| {
             let _ = producer.push_slice(&frame);
         };
-        let input_stream = build_input(input, &in_config, move |samples: &[f32]| {
-            for frame in samples.chunks(in_channels) {
-                capture(widen(frame));
-            }
-        }, move |_| input_failed.store(true, Ordering::Relaxed))?;
+        let input_stream = build_input(
+            input,
+            &in_config,
+            in_period,
+            move |samples: &[f32]| {
+                for frame in samples.chunks(in_channels) {
+                    capture(widen(frame));
+                }
+            },
+            move |_| input_failed.store(true, Ordering::Relaxed),
+        )?;
 
         let mut resampler = Resampler::new(rate, out_rate);
         let mut playing = false;
@@ -113,12 +142,22 @@ impl Audio {
                 }
             }
         };
-        let output_stream = build_output(output, &out_config, move |samples: &mut [f32]| {
-            play(samples);
-        }, move |_| output_failed.store(true, Ordering::Relaxed))?;
+        let output_stream = build_output(
+            output,
+            &out_config,
+            out_period,
+            move |samples: &mut [f32]| {
+                play(samples);
+            },
+            move |_| output_failed.store(true, Ordering::Relaxed),
+        )?;
 
-        input_stream.play().map_err(|e| format!("cannot start the M8 capture: {e}"))?;
-        output_stream.play().map_err(|e| format!("cannot start audio output: {e}"))?;
+        input_stream
+            .play()
+            .map_err(|e| format!("cannot start the M8 capture: {e}"))?;
+        output_stream
+            .play()
+            .map_err(|e| format!("cannot start audio output: {e}"))?;
 
         let description = format!(
             "{} to {} at {rate} Hz via {}",
@@ -126,7 +165,12 @@ impl Audio {
             name_of(output),
             host.name(),
         );
-        Ok(Self { _input: input_stream, _output: output_stream, failed, description })
+        Ok(Self {
+            _input: input_stream,
+            _output: output_stream,
+            failed,
+            description,
+        })
     }
 
     /// True once either stream has failed.
@@ -142,10 +186,14 @@ impl Audio {
 
 /// The M8's capture devices on one host, monitors left out.
 fn m8_inputs(host: &Host) -> Vec<Device> {
-    let Ok(inputs) = host.input_devices() else { return Vec::new() };
+    let Ok(inputs) = host.input_devices() else {
+        return Vec::new();
+    };
     inputs
         .filter(|device| {
-            let Ok(about) = device.description() else { return false };
+            let Ok(about) = device.description() else {
+                return false;
+            };
             let name = about.name().to_lowercase();
             name.contains(DEVICE_NEEDLE) && !name.contains(MONITOR_NEEDLE)
         })
@@ -241,7 +289,12 @@ fn input_config(device: &Device) -> Result<SupportedStreamConfig, String> {
         .supported_input_configs()
         .map_err(|e| format!("cannot read the M8's audio formats: {e}"))?
         .collect();
-    ranges.sort_by_key(|range| (range.channels() != CHANNELS as u16, u32::MAX - range.max_sample_rate()));
+    ranges.sort_by_key(|range| {
+        (
+            range.channels() != CHANNELS as u16,
+            u32::MAX - range.max_sample_rate(),
+        )
+    });
     ranges
         .into_iter()
         .next()
@@ -269,10 +322,11 @@ fn output_config(device: &Device, rate: u32) -> Result<SupportedStreamConfig, St
 fn build_input(
     device: &Device,
     config: &SupportedStreamConfig,
+    period: Option<u32>,
     mut on_samples: impl FnMut(&[f32]) + Send + 'static,
     on_error: impl FnMut(cpal::Error) + Send + 'static,
 ) -> Result<Stream, String> {
-    let stream_config = stream_config(config);
+    let stream_config = stream_config(config, period);
 
     fn build<T>(
         device: &Device,
@@ -324,10 +378,11 @@ fn build_input(
 fn build_output(
     device: &Device,
     config: &SupportedStreamConfig,
+    period: Option<u32>,
     mut fill: impl FnMut(&mut [f32]) + Send + 'static,
     on_error: impl FnMut(cpal::Error) + Send + 'static,
 ) -> Result<Stream, String> {
-    let stream_config = stream_config(config);
+    let stream_config = stream_config(config, period);
 
     fn build<T>(
         device: &Device,
@@ -372,16 +427,34 @@ fn build_output(
         SampleFormat::U32 => build::<u32>(device, stream_config, fill, on_error),
         SampleFormat::U64 => build::<u64>(device, stream_config, fill, on_error),
         SampleFormat::F64 => build::<f64>(device, stream_config, fill, on_error),
-        other => return Err(format!("the output's audio format ({other}) is not supported")),
+        other => {
+            return Err(format!(
+                "the output's audio format ({other}) is not supported"
+            ))
+        }
     };
     result.map_err(|e| format!("cannot play audio: {e}"))
 }
 
-fn stream_config(config: &SupportedStreamConfig) -> StreamConfig {
+fn stream_config(config: &SupportedStreamConfig, period: Option<u32>) -> StreamConfig {
     StreamConfig {
         channels: config.channels(),
         sample_rate: config.sample_rate(),
-        buffer_size: cpal::BufferSize::Default,
+        buffer_size: period.map_or(BufferSize::Default, BufferSize::Fixed),
+    }
+}
+
+fn frames_at(rate: u32, duration: Duration) -> usize {
+    ((rate as f32 * duration.as_secs_f32()) as usize).max(1)
+}
+
+/// The period to ask a device for: `PERIOD`'s worth of frames, held inside what
+/// it allows. `None` where the host will not say, and its default has to do.
+fn period(config: &SupportedStreamConfig) -> Option<u32> {
+    let wanted = frames_at(config.sample_rate(), PERIOD) as u32;
+    match *config.buffer_size() {
+        SupportedBufferSize::Range { min, max } => Some(wanted.clamp(min, max.max(min))),
+        SupportedBufferSize::Unknown => None,
     }
 }
 

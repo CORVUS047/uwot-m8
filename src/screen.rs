@@ -69,7 +69,11 @@ impl Screen {
             return;
         }
         self.is_model_02 = model_02;
-        let (w, h) = if model_02 { MODEL_02_SIZE } else { MODEL_01_SIZE };
+        let (w, h) = if model_02 {
+            MODEL_02_SIZE
+        } else {
+            MODEL_01_SIZE
+        };
         if (w, h) != (self.width, self.height) {
             self.width = w;
             self.height = h;
@@ -132,12 +136,19 @@ impl Screen {
         let y = c.y as i32 + self.font.metrics.text_offset_y + self.font.metrics.screen_offset_y;
 
         if c.fg != c.bg {
-            self.fill(x, y, self.font.metrics.glyph_w as i32, self.font.metrics.glyph_h as i32, c.bg.as_u32());
+            self.fill(
+                x,
+                y,
+                self.font.metrics.glyph_w as i32,
+                self.font.metrics.glyph_h as i32,
+                c.bg.as_u32(),
+            );
         }
 
         let fg = c.fg.as_u32();
         let mut ink = Vec::new();
-        self.font.glyph(c.c, |dx, dy| ink.push((dx as i32, dy as i32)));
+        self.font
+            .glyph(c.c, |dx, dy| ink.push((dx as i32, dy as i32)));
         for (dx, dy) in ink {
             self.plot(x + dx, y + dy, fg);
         }
@@ -148,11 +159,21 @@ impl Screen {
             return;
         }
 
-        let strip_len = if w.samples.is_empty() { self.prev_waveform_len } else { w.samples.len() };
+        let strip_len = if w.samples.is_empty() {
+            self.prev_waveform_len
+        } else {
+            w.samples.len()
+        };
         let strip_x = self.width as i32 - strip_len as i32;
         let max_height = self.font.metrics.waveform_max_height;
 
-        self.fill(strip_x, 0, strip_len as i32, max_height as i32 + 1, self.background.as_u32());
+        self.fill(
+            strip_x,
+            0,
+            strip_len as i32,
+            max_height as i32 + 1,
+            self.background.as_u32(),
+        );
 
         let color = w.color.as_u32();
         for (i, &sample) in w.samples.iter().enumerate() {

@@ -83,7 +83,11 @@ pub fn mode_index(is_model_02: bool, device_mode: usize) -> Option<usize> {
     if device_mode > 2 {
         return None;
     }
-    let index = if is_model_02 { device_mode + 2 } else { device_mode };
+    let index = if is_model_02 {
+        device_mode + 2
+    } else {
+        device_mode
+    };
     (index < SPECS.len()).then_some(index)
 }
 
@@ -101,7 +105,9 @@ pub struct Font {
 
 /// Decodes the atlas for one font mode.
 pub fn load(mode: usize) -> Result<Font, String> {
-    let spec = SPECS.get(mode).ok_or_else(|| format!("no such font mode {mode}"))?;
+    let spec = SPECS
+        .get(mode)
+        .ok_or_else(|| format!("no such font mode {mode}"))?;
     let (mask, atlas_w, atlas_h) = decode_mono_bmp(spec.bmp)?;
 
     let expected_w = spec.metrics.glyph_w * GLYPH_COUNT;
@@ -112,7 +118,11 @@ pub fn load(mode: usize) -> Result<Font, String> {
         ));
     }
 
-    Ok(Font { metrics: spec.metrics, mask, atlas_w })
+    Ok(Font {
+        metrics: spec.metrics,
+        mask,
+        atlas_w,
+    })
 }
 
 impl Font {
@@ -140,7 +150,8 @@ impl Font {
 /// Decodes an uncompressed 1-bit BMP into a top-down ink mask.
 fn decode_mono_bmp(data: &[u8]) -> Result<(Vec<bool>, usize, usize), String> {
     let u16at = |at: usize| u16::from_le_bytes([data[at], data[at + 1]]);
-    let u32at = |at: usize| u32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
+    let u32at =
+        |at: usize| u32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
 
     if data.len() < 54 || &data[0..2] != b"BM" {
         return Err("not a BMP".into());

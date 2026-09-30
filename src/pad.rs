@@ -44,7 +44,12 @@ impl Default for Pads {
 impl Pads {
     pub fn new() -> Self {
         match Gilrs::new() {
-            Ok(gilrs) => Self { gilrs: Some(gilrs), error: None, axes: Vec::new(), held: Vec::new() },
+            Ok(gilrs) => Self {
+                gilrs: Some(gilrs),
+                error: None,
+                axes: Vec::new(),
+                held: Vec::new(),
+            },
             Err(e) => Self {
                 gilrs: None,
                 error: Some(format!("no controller support: {e}")),
@@ -78,7 +83,8 @@ impl Pads {
                 }
                 EventType::ButtonReleased(button, code) => {
                     let name = button_name(button, code.into_u32());
-                    self.held.retain(|(id, held)| !(*id == pad && *held == name));
+                    self.held
+                        .retain(|(id, held)| !(*id == pad && *held == name));
                     events.push(PadEvent { name, down: false });
                 }
                 EventType::AxisChanged(axis, value, _) => {
@@ -109,18 +115,27 @@ impl Pads {
         mapped: bool,
         events: &mut Vec<PadEvent>,
     ) {
-        let Some((negative, positive)) = axis_directions(axis) else { return };
+        let Some((negative, positive)) = axis_directions(axis) else {
+            return;
+        };
         let was = self
             .axes
             .iter()
             .find(|(id, known, _)| *id == pad && *known == axis)
             .map(|(_, _, state)| *state)
-            .unwrap_or(AxisState { pushed: 0, armed: mapped });
+            .unwrap_or(AxisState {
+                pushed: 0,
+                armed: mapped,
+            });
         let now = step_axis(was, value);
         if now == was {
             return;
         }
-        match self.axes.iter_mut().find(|(id, known, _)| *id == pad && *known == axis) {
+        match self
+            .axes
+            .iter_mut()
+            .find(|(id, known, _)| *id == pad && *known == axis)
+        {
             Some(entry) => entry.2 = now,
             None => self.axes.push((pad, axis, now)),
         }
@@ -144,8 +159,13 @@ impl Pads {
 
     /// The controllers currently plugged in, by name.
     pub fn names(&self) -> Vec<String> {
-        let Some(gilrs) = self.gilrs.as_ref() else { return Vec::new() };
-        gilrs.gamepads().map(|(_, pad)| pad.name().to_string()).collect()
+        let Some(gilrs) = self.gilrs.as_ref() else {
+            return Vec::new();
+        };
+        gilrs
+            .gamepads()
+            .map(|(_, pad)| pad.name().to_string())
+            .collect()
     }
 
     /// A line for the settings menu: what is plugged in, or why nothing is.
@@ -237,7 +257,10 @@ mod tests {
 
     /// An axis that has been centred at least once, i.e. an ordinary stick.
     fn armed(pushed: i8) -> AxisState {
-        AxisState { pushed, armed: true }
+        AxisState {
+            pushed,
+            armed: true,
+        }
     }
 
     #[test]
@@ -257,14 +280,23 @@ mod tests {
 
     #[test]
     fn a_recognised_controller_steers_from_the_first_movement() {
-        let start = AxisState { pushed: 0, armed: true };
+        let start = AxisState {
+            pushed: 0,
+            armed: true,
+        };
         assert_eq!(step_axis(start, -1.0).pushed, -1);
     }
 
     #[test]
     fn an_axis_that_rests_at_one_end_holds_nothing_until_it_is_centred() {
         let resting = step_axis(AxisState::default(), -1.0);
-        assert_eq!(resting, AxisState { pushed: 0, armed: false });
+        assert_eq!(
+            resting,
+            AxisState {
+                pushed: 0,
+                armed: false
+            }
+        );
         assert_eq!(step_axis(resting, -0.8).pushed, 0);
         let centred = step_axis(resting, 0.0);
         assert!(centred.armed);
@@ -273,7 +305,10 @@ mod tests {
 
     #[test]
     fn only_the_left_stick_and_the_hat_steer() {
-        assert_eq!(axis_directions(Axis::LeftStickY), Some(("PadDown", "PadUp")));
+        assert_eq!(
+            axis_directions(Axis::LeftStickY),
+            Some(("PadDown", "PadUp"))
+        );
         assert_eq!(axis_directions(Axis::DPadX), Some(("PadLeft", "PadRight")));
         assert_eq!(axis_directions(Axis::RightStickX), None);
     }

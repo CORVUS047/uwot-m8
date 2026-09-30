@@ -1,7 +1,7 @@
 //! The settings menu's state: the open page, the selected row, and whether it
 //! is waiting for a key to bind.
 
-use crate::config::{Changed, Config, MenuEnv, Setting};
+use crate::config::{Button, Changed, Config, MenuEnv, Setting};
 
 /// What a keypress means to the menu, once the frontend has decoded it.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -30,10 +30,34 @@ pub struct Outcome {
     pub message: Option<String>,
 }
 
+/// What a key or button bound to a direction means to the menu.
+///
+/// The menu answers to whatever drives the M8, so rebinding Up moves the
+/// selection up too. Escape is left out on purpose: there has to be one way
+/// back out of the menu that no binding can take away.
+pub fn bound_action(config: &Config, name: &str, step: i32) -> Option<Action> {
+    if name == "Escape" {
+        return None;
+    }
+    Some(match config.button_bound(name)? {
+        Button::Up => Action::Previous,
+        Button::Down => Action::Next,
+        Button::Left => Action::Adjust(-step),
+        Button::Right => Action::Adjust(step),
+        _ => return None,
+    })
+}
+
 /// What a controller button means to the menu.
-pub fn pad_action(name: &str, capturing: bool) -> Option<Action> {
+///
+/// Its binding first, then the face buttons, so a pad still drives the menu
+/// when its d-pad has been bound to something else.
+pub fn pad_action(config: &Config, name: &str, capturing: bool) -> Option<Action> {
     if capturing {
         return Some(Action::Bind(Some(name.to_string())));
+    }
+    if let Some(action) = bound_action(config, name, 1) {
+        return Some(action);
     }
     Some(match name {
         "PadUp" => Action::Previous,
@@ -63,7 +87,11 @@ impl Menu {
     /// Opens the menu at its top-level page.
     pub fn new(rows: Vec<Setting>) -> Self {
         Self {
-            pages: vec![Page { title: "Settings", rows, selected: 0 }],
+            pages: vec![Page {
+                title: "Settings",
+                rows,
+                selected: 0,
+            }],
             capturing: false,
         }
     }
@@ -105,9 +133,7 @@ impl Menu {
         }
         match self.selected_setting() {
             setting if setting.page().is_some() => "up/down select   Enter open   Esc back",
-            setting if setting.bind_target().is_some() => {
-                "up/down select   Enter bind   Esc back"
-            }
+            setting if setting.bind_target().is_some() => "up/down select   Enter bind   Esc back",
             Setting::Back => "up/down select   Enter back   Esc back",
             _ => "up/down select   left/right change   Esc back",
         }
@@ -138,7 +164,11 @@ impl Menu {
                 let write = !matches!(setting, Setting::Back)
                     && setting.page().is_none()
                     && setting.bind_target().is_none();
-                Outcome { changed, write, ..Outcome::default() }
+                Outcome {
+                    changed,
+                    write,
+                    ..Outcome::default()
+                }
             }
             Action::Activate => self.activate(config, env),
             Action::Back => self.leave(),
@@ -150,7 +180,11 @@ impl Menu {
     fn activate(&mut self, config: &mut Config, env: &MenuEnv) -> Outcome {
         let setting = self.selected_setting();
         if let Some(rows) = setting.page() {
-            self.pages.push(Page { title: setting.page_title(), rows, selected: 0 });
+            self.pages.push(Page {
+                title: setting.page_title(),
+                rows,
+                selected: 0,
+            });
             return Outcome::default();
         }
         if setting == Setting::Back {
@@ -161,10 +195,17 @@ impl Menu {
             return Outcome::default();
         }
         if config.activate(setting) {
-            return Outcome { write: true, ..Outcome::default() };
+            return Outcome {
+                write: true,
+                ..Outcome::default()
+            };
         }
         let changed = config.adjust(setting, 1, env);
-        Outcome { changed, write: true, ..Outcome::default() }
+        Outcome {
+            changed,
+            write: true,
+            ..Outcome::default()
+        }
     }
 
     /// Escape, or Enter on a Back row: out of the page, or out of the menu.
@@ -173,7 +214,11 @@ impl Menu {
             self.pages.pop();
             return Outcome::default();
         }
-        Outcome { closed: true, write: true, ..Outcome::default() }
+        Outcome {
+            closed: true,
+            write: true,
+            ..Outcome::default()
+        }
     }
 
     /// While capturing, every key means itself.
@@ -189,7 +234,10 @@ impl Menu {
         match name {
             Some(name) => {
                 config.bind(target, &name);
-                Outcome { write: true, ..Outcome::default() }
+                Outcome {
+                    write: true,
+                    ..Outcome::default()
+                }
             }
             None => Outcome {
                 message: Some("that key cannot be bound".into()),
@@ -200,7 +248,10 @@ impl Menu {
 
     fn selected_setting(&self) -> Setting {
         let page = self.page();
-        page.rows.get(page.selected).copied().unwrap_or(Setting::Back)
+        page.rows
+            .get(page.selected)
+            .copied()
+            .unwrap_or(Setting::Back)
     }
 
     fn page(&self) -> &Page {
@@ -208,7 +259,9 @@ impl Menu {
     }
 
     fn page_mut(&mut self) -> &mut Page {
-        self.pages.last_mut().expect("the menu always has a page open")
+        self.pages
+            .last_mut()
+            .expect("the menu always has a page open")
     }
 }
 
@@ -216,9 +269,14 @@ impl Menu {
 mod tests {
     use super::*;
     use crate::cc::{Shape, Trigger};
+    use crate::config::BindTarget;
 
     fn open() -> (Menu, Config, MenuEnv) {
-        (Menu::new(Setting::terminal()), Config::default(), MenuEnv::default())
+        (
+            Menu::new(Setting::terminal()),
+            Config::default(),
+            MenuEnv::default(),
+        )
     }
 
     /// Moves the selection onto the row holding `setting`.
@@ -234,14 +292,58 @@ mod tests {
 
     #[test]
     fn a_controller_drives_the_menu_and_binds_itself() {
-        assert_eq!(pad_action("PadDown", false), Some(Action::Next));
-        assert_eq!(pad_action("PadEast", false), Some(Action::Back));
-        assert_eq!(pad_action("PadRight", false), Some(Action::Adjust(1)));
-        assert_eq!(pad_action("PadL2", false), None);
+        let config = Config::default();
+        assert_eq!(pad_action(&config, "PadDown", false), Some(Action::Next));
+        assert_eq!(pad_action(&config, "PadEast", false), Some(Action::Back));
         assert_eq!(
-            pad_action("PadDown", true),
+            pad_action(&config, "PadRight", false),
+            Some(Action::Adjust(1))
+        );
+        assert_eq!(pad_action(&config, "PadL2", false), None);
+        assert_eq!(
+            pad_action(&config, "PadDown", true),
             Some(Action::Bind(Some("PadDown".into())))
         );
+    }
+
+    #[test]
+    fn the_keys_bound_to_the_directions_drive_the_menu() {
+        let mut config = Config::default();
+        config.bind(BindTarget::Button(Button::Up), "w");
+        config.bind(BindTarget::Button(Button::Down), "s");
+        config.bind(BindTarget::Button(Button::Left), "a");
+        config.bind(BindTarget::Button(Button::Right), "d");
+
+        assert_eq!(bound_action(&config, "w", 1), Some(Action::Previous));
+        assert_eq!(bound_action(&config, "s", 1), Some(Action::Next));
+        assert_eq!(bound_action(&config, "a", 10), Some(Action::Adjust(-10)));
+        assert_eq!(bound_action(&config, "d", 10), Some(Action::Adjust(10)));
+        // A button that is not a direction is left to the frontend.
+        assert_eq!(bound_action(&config, "x", 1), None);
+    }
+
+    #[test]
+    fn a_rebound_pad_still_drives_the_menu_by_its_d_pad() {
+        let mut config = Config::default();
+        config.bind(BindTarget::Button(Button::Up), "PadL1");
+        assert_eq!(pad_action(&config, "PadL1", false), Some(Action::Previous));
+        assert_eq!(pad_action(&config, "PadUp", false), Some(Action::Previous));
+    }
+
+    /// Whatever else it is bound to, Escape has to keep closing the menu.
+    #[test]
+    fn escape_is_never_taken_over_by_a_binding() {
+        let mut config = Config::default();
+        config.bind(BindTarget::Button(Button::Down), "Escape");
+        assert_eq!(bound_action(&config, "Escape", 1), None);
+    }
+
+    #[test]
+    fn a_key_that_fires_a_cc_does_not_move_the_selection() {
+        let mut config = Config::default();
+        config.bind(BindTarget::Button(Button::Up), "w");
+        config.bind(BindTarget::Cc(0), "w");
+        assert_eq!(bound_action(&config, "w", 1), None);
     }
 
     #[test]
@@ -303,7 +405,12 @@ mod tests {
         let (mut menu, mut config, env) = open();
         select(&mut menu, &mut config, &env, Setting::Buttons);
         menu.handle(Action::Activate, &mut config, &env);
-        select(&mut menu, &mut config, &env, Setting::Key(crate::config::Button::Up));
+        select(
+            &mut menu,
+            &mut config,
+            &env,
+            Setting::Key(crate::config::Button::Up),
+        );
         menu.handle(Action::Activate, &mut config, &env);
 
         let outcome = menu.handle(Action::Bind(None), &mut config, &env);
@@ -373,7 +480,10 @@ mod tests {
         menu.handle(Action::Activate, &mut config, &env);
 
         let items = menu.items(&config);
-        let time = items.iter().find(|(label, _)| label == "Time").expect("a time row");
+        let time = items
+            .iter()
+            .find(|(label, _)| label == "Time")
+            .expect("a time row");
         assert_eq!(time.1, "-");
     }
 }

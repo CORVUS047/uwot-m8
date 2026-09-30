@@ -53,9 +53,8 @@ pub fn key_name(scancode: Scancode) -> Option<String> {
 
 /// True for `F1` and up.
 fn is_function_key(name: &str) -> bool {
-    name.strip_prefix('F').is_some_and(|number| {
-        !number.is_empty() && number.chars().all(|c| c.is_ascii_digit())
-    })
+    name.strip_prefix('F')
+        .is_some_and(|number| !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()))
 }
 
 fn bound(config: &Config, scancode: Scancode) -> Option<Bound> {
@@ -67,7 +66,11 @@ fn note_offset(scancode: Scancode) -> Option<u8> {
     let name = scancode.name();
     let mut chars = name.chars();
     let first = chars.next()?;
-    chars.next().is_none().then(|| keys::note_offset(first)).flatten()
+    chars
+        .next()
+        .is_none()
+        .then(|| keys::note_offset(first))
+        .flatten()
 }
 
 pub struct Input {

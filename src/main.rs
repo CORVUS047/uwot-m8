@@ -82,7 +82,11 @@ Keyjazz (while enabled):
 ";
 
 fn parse_args() -> Result<Option<Options>, String> {
-    let mut options = Options { device: None, scale: DEFAULT_SCALE, fullscreen: false };
+    let mut options = Options {
+        device: None,
+        scale: DEFAULT_SCALE,
+        fullscreen: false,
+    };
     let mut args = std::env::args().skip(1);
 
     while let Some(arg) = args.next() {
@@ -205,7 +209,12 @@ fn save_settings(config: &Config) {
 /// The settings menu's status line: audio, MIDI and controllers.
 fn status(outputs: &Outputs, pads: &pad::Pads, config: &Config) -> String {
     let parts = [outputs.status(config), pads.status()];
-    parts.iter().filter(|part| !part.is_empty()).cloned().collect::<Vec<_>>().join("   ")
+    parts
+        .iter()
+        .filter(|part| !part.is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("   ")
 }
 
 fn title(m8: Option<&M8>, keyjazz: &input::Input) -> String {
@@ -267,9 +276,15 @@ fn run(options: Options) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
 
-    let mut canvas = window.into_canvas().present_vsync().build().map_err(|e| e.to_string())?;
+    let mut canvas = window
+        .into_canvas()
+        .present_vsync()
+        .build()
+        .map_err(|e| e.to_string())?;
     canvas.set_integer_scale(true)?;
-    canvas.set_logical_size(screen.width, logical_height).map_err(|e| e.to_string())?;
+    canvas
+        .set_logical_size(screen.width, logical_height)
+        .map_err(|e| e.to_string())?;
 
     let creator = canvas.texture_creator();
     let mut texture = make_texture(&creator, &screen)?;
@@ -292,7 +307,10 @@ fn run(options: Options) -> Result<(), String> {
         println!("Connected to M8 on {}", m8.path);
     }
 
-    canvas.window_mut().set_title(&title(m8.as_ref(), &keys)).map_err(|e| e.to_string())?;
+    canvas
+        .window_mut()
+        .set_title(&title(m8.as_ref(), &keys))
+        .map_err(|e| e.to_string())?;
 
     let mut idle_frames = 0u32;
     let mut last_reconnect_attempt = Instant::now();
@@ -304,7 +322,12 @@ fn run(options: Options) -> Result<(), String> {
             if let Some(open) = menu.as_mut() {
                 match event {
                     Event::Quit { .. } => break 'main,
-                    Event::KeyDown { scancode: Some(scancode), keymod, repeat: false, .. } => {
+                    Event::KeyDown {
+                        scancode: Some(scancode),
+                        keymod,
+                        repeat: false,
+                        ..
+                    } => {
                         overlay_stale = true;
                         let action = if open.is_capturing() {
                             match scancode {
@@ -314,14 +337,19 @@ fn run(options: Options) -> Result<(), String> {
                         } else {
                             let coarse = keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD);
                             let step = if coarse { COARSE_STEP } else { 1 };
-                            match scancode {
-                                Scancode::Up => menu::Action::Previous,
-                                Scancode::Down => menu::Action::Next,
-                                Scancode::Left => menu::Action::Adjust(-step),
-                                Scancode::Right => menu::Action::Adjust(step),
-                                Scancode::Return | Scancode::Space => menu::Action::Activate,
-                                Scancode::Escape | Scancode::Tab => menu::Action::Back,
-                                _ => continue,
+                            let bound = input::key_name(scancode)
+                                .and_then(|name| menu::bound_action(&config, &name, step));
+                            match bound {
+                                Some(action) => action,
+                                None => match scancode {
+                                    Scancode::Up => menu::Action::Previous,
+                                    Scancode::Down => menu::Action::Next,
+                                    Scancode::Left => menu::Action::Adjust(-step),
+                                    Scancode::Right => menu::Action::Adjust(step),
+                                    Scancode::Return | Scancode::Space => menu::Action::Activate,
+                                    Scancode::Escape | Scancode::Tab => menu::Action::Back,
+                                    _ => continue,
+                                },
                             }
                         };
 
@@ -335,16 +363,25 @@ fn run(options: Options) -> Result<(), String> {
 
             let action = match event {
                 Event::Quit { .. } => break 'main,
-                Event::KeyDown { scancode: Some(scancode), keymod, repeat, .. } => {
+                Event::KeyDown {
+                    scancode: Some(scancode),
+                    keymod,
+                    repeat,
+                    ..
+                } => {
                     let before = keys.jazz.enabled;
                     let action = keys.key_down(&config, scancode, keymod, repeat);
                     retitle |= keys.jazz.enabled != before;
                     action
                 }
-                Event::KeyUp { scancode: Some(scancode), .. } => {
-                    keys.key_up(&config, scancode)
-                }
-                Event::Window { win_event: WindowEvent::FocusLost, .. } => {
+                Event::KeyUp {
+                    scancode: Some(scancode),
+                    ..
+                } => keys.key_up(&config, scancode),
+                Event::Window {
+                    win_event: WindowEvent::FocusLost,
+                    ..
+                } => {
                     let released = keys.release_all();
                     outputs.release_all(&released, &config);
                     Action::None
@@ -359,7 +396,9 @@ fn run(options: Options) -> Result<(), String> {
                 Action::OpenSettings => {
                     let released = keys.release_all();
                     outputs.release_all(&released, &config);
-                    env = MenuEnv { midi_ports: midi::ports() };
+                    env = MenuEnv {
+                        midi_ports: midi::ports(),
+                    };
                     menu = Some(Menu::new(Setting::window()));
                     overlay_stale = true;
                 }
@@ -396,7 +435,8 @@ fn run(options: Options) -> Result<(), String> {
                 if !event.down {
                     continue;
                 }
-                let Some(action) = menu::pad_action(&event.name, open.is_capturing()) else {
+                let Some(action) = menu::pad_action(&config, &event.name, open.is_capturing())
+                else {
                     continue;
                 };
                 let outcome = open.handle(action, &mut config, &env);
@@ -495,7 +535,9 @@ fn run(options: Options) -> Result<(), String> {
             overlay_canvas.resize(screen.width as usize, logical_height as usize);
             overlay = make_overlay(&creator, screen.width, logical_height)?;
             overlay_stale = true;
-            canvas.set_logical_size(screen.width, logical_height).map_err(|e| e.to_string())?;
+            canvas
+                .set_logical_size(screen.width, logical_height)
+                .map_err(|e| e.to_string())?;
             let window = canvas.window_mut();
             let (window_w, window_h) = window.size();
             if window_w < screen.width * 2 || window_h < logical_height * 2 {
@@ -508,7 +550,10 @@ fn run(options: Options) -> Result<(), String> {
 
         if retitle {
             retitle = false;
-            canvas.window_mut().set_title(&title(m8.as_ref(), &keys)).map_err(|e| e.to_string())?;
+            canvas
+                .window_mut()
+                .set_title(&title(m8.as_ref(), &keys))
+                .map_err(|e| e.to_string())?;
         }
 
         if screen.dirty {
@@ -520,12 +565,7 @@ fn run(options: Options) -> Result<(), String> {
             overlay_stale = false;
             overlay_canvas.clear();
             if config.show_controls {
-                ui::draw_keypad(
-                    &mut overlay_canvas,
-                    &ui_font,
-                    screen.height as usize,
-                    keys.keys(),
-                );
+                ui::draw_keypad(&mut overlay_canvas, screen.height as usize, keys.keys());
             }
             if let Some(open) = &menu {
                 let items = open.items(&config);
@@ -545,7 +585,11 @@ fn run(options: Options) -> Result<(), String> {
         let bg = screen.background();
         canvas.set_draw_color(Color::RGB(bg.r, bg.g, bg.b));
         canvas.clear();
-        canvas.copy(&texture, None, Some(Rect::new(0, 0, screen.width, screen.height)))?;
+        canvas.copy(
+            &texture,
+            None,
+            Some(Rect::new(0, 0, screen.width, screen.height)),
+        )?;
         canvas.copy(&overlay, None, None)?;
         canvas.present();
     }

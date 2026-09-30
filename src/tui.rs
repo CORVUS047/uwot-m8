@@ -6,12 +6,12 @@ use crate::config::{Bound, Config, MenuEnv, Setting};
 use crate::keys::{self, bits, Keyjazz};
 use crate::m8::{self, M8};
 use crate::menu::{self, Menu};
+use crate::midi;
 use crate::outputs::Outputs;
+use crate::pad::{PadEvent, Pads};
 use crate::proto;
 use crate::term::{Key, KeyEvent, KeyKind, Keyboard, Terminal};
 use crate::text::TextScreen;
-use crate::pad::{PadEvent, Pads};
-use crate::midi;
 
 const FRAME: Duration = Duration::from_millis(8);
 /// Empty polls before pinging the device to see whether it is still there.
@@ -76,7 +76,10 @@ struct Options {
 }
 
 fn parse_args() -> Result<Option<Options>, String> {
-    let mut options = Options { device: None, colors: None };
+    let mut options = Options {
+        device: None,
+        colors: None,
+    };
     let mut args = std::env::args().skip(1);
 
     while let Some(arg) = args.next() {
@@ -119,12 +122,19 @@ struct Buttons {
 
 impl Buttons {
     fn new() -> Self {
-        Self { down: Vec::new(), mask: 0 }
+        Self {
+            down: Vec::new(),
+            mask: 0,
+        }
     }
 
     fn press(&mut self, key: Key, buttons: u8, exact: bool) {
         let expiry = (!exact).then(|| Instant::now() + PULSE);
-        match self.down.iter_mut().find(|(existing, _, _)| *existing == key) {
+        match self
+            .down
+            .iter_mut()
+            .find(|(existing, _, _)| *existing == key)
+        {
             Some(entry) => *entry = (key, buttons, expiry),
             None => self.down.push((key, buttons, expiry)),
         }
@@ -140,7 +150,8 @@ impl Buttons {
     fn expire(&mut self) -> bool {
         let now = Instant::now();
         let before = self.down.len();
-        self.down.retain(|(_, _, expiry)| expiry.is_none_or(|at| at > now));
+        self.down
+            .retain(|(_, _, expiry)| expiry.is_none_or(|at| at > now));
         if self.down.len() != before {
             self.recompute();
             return true;
@@ -154,7 +165,10 @@ impl Buttons {
     }
 
     fn recompute(&mut self) {
-        self.mask = self.down.iter().fold(0, |mask, (_, buttons, _)| mask | buttons);
+        self.mask = self
+            .down
+            .iter()
+            .fold(0, |mask, (_, buttons, _)| mask | buttons);
     }
 }
 
@@ -171,7 +185,11 @@ impl CcKeys {
     /// Notes the key as down; false if it already was, so repeats don't retrigger.
     fn press(&mut self, key: Key, slot: usize, exact: bool) -> bool {
         let expiry = (!exact).then(|| Instant::now() + PULSE);
-        match self.down.iter_mut().find(|(existing, _, _)| *existing == key) {
+        match self
+            .down
+            .iter_mut()
+            .find(|(existing, _, _)| *existing == key)
+        {
             Some(entry) => {
                 *entry = (key, slot, expiry);
                 false
@@ -185,7 +203,10 @@ impl CcKeys {
 
     /// The slot the key was holding, now that it is up.
     fn release(&mut self, key: Key) -> Option<usize> {
-        let at = self.down.iter().position(|(existing, _, _)| *existing == key)?;
+        let at = self
+            .down
+            .iter()
+            .position(|(existing, _, _)| *existing == key)?;
         Some(self.down.remove(at).1)
     }
 
@@ -286,8 +307,12 @@ impl App {
                 return;
             }
             let capturing = self.menu.as_ref().is_some_and(Menu::is_capturing);
-            let Some(action) = menu::pad_action(&event.name, capturing) else { return };
-            let Some(mut menu) = self.menu.take() else { return };
+            let Some(action) = menu::pad_action(&self.config, &event.name, capturing) else {
+                return;
+            };
+            let Some(mut menu) = self.menu.take() else {
+                return;
+            };
             let outcome = menu.handle(action, &mut self.config, &self.env);
             self.menu = Some(menu);
             self.apply_menu(outcome);
@@ -354,7 +379,9 @@ impl App {
                 let mut released = self.cc_keys.clear();
                 released.extend(self.pad_cc.drain(..).map(|(_, slot)| slot));
                 self.outputs.release_all(&released, &self.config);
-                self.env = MenuEnv { midi_ports: midi::ports() };
+                self.env = MenuEnv {
+                    midi_ports: midi::ports(),
+                };
                 self.menu = Some(Menu::new(Setting::terminal()));
                 self.repaint = true;
             }
@@ -426,7 +453,9 @@ impl App {
         if event.kind == KeyKind::Release {
             return Outcome::Continue;
         }
-        let Some(menu) = self.menu.as_mut() else { return Outcome::Continue };
+        let Some(menu) = self.menu.as_mut() else {
+            return Outcome::Continue;
+        };
         self.repaint = true;
 
         let action = if menu.is_capturing() {
@@ -436,14 +465,19 @@ impl App {
             }
         } else {
             let step = if event.shift { COARSE_STEP } else { 1 };
-            match event.key {
-                Key::Escape | Key::Tab => menu::Action::Back,
-                Key::Up => menu::Action::Previous,
-                Key::Down => menu::Action::Next,
-                Key::Left => menu::Action::Adjust(-step),
-                Key::Right => menu::Action::Adjust(step),
-                Key::Enter | Key::Char(' ') => menu::Action::Activate,
-                _ => return Outcome::Continue,
+            let bound =
+                key_name(event.key).and_then(|name| menu::bound_action(&self.config, &name, step));
+            match bound {
+                Some(action) => action,
+                None => match event.key {
+                    Key::Escape | Key::Tab => menu::Action::Back,
+                    Key::Up => menu::Action::Previous,
+                    Key::Down => menu::Action::Next,
+                    Key::Left => menu::Action::Adjust(-step),
+                    Key::Right => menu::Action::Adjust(step),
+                    Key::Enter | Key::Char(' ') => menu::Action::Activate,
+                    _ => return Outcome::Continue,
+                },
             }
         };
 
@@ -487,7 +521,10 @@ impl App {
             None => "disconnected, retrying".to_string(),
         };
         if self.jazz.enabled {
-            status += &format!("   keyjazz oct {} vel {:02X}", self.jazz.octave, self.jazz.velocity);
+            status += &format!(
+                "   keyjazz oct {} vel {:02X}",
+                self.jazz.octave, self.jazz.velocity
+            );
         }
         if !exact {
             status += "   press-only terminal: Shift/Alt/Ctrl for chords";

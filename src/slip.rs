@@ -16,7 +16,10 @@ pub struct Slip {
 
 impl Slip {
     pub fn new() -> Self {
-        Self { buf: Vec::with_capacity(MAX_PACKET), escaped: false }
+        Self {
+            buf: Vec::with_capacity(MAX_PACKET),
+            escaped: false,
+        }
     }
 
     /// Feeds bytes from the serial port, calling `on_packet` for every complete frame.

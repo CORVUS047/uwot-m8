@@ -168,10 +168,15 @@ impl Binding {
 
     /// A one-line description for the menu row that opens this binding.
     pub fn summary(&self) -> String {
-        let Some(key) = &self.key else { return "unbound".into() };
+        let Some(key) = &self.key else {
+            return "unbound".into();
+        };
         match self.shape {
             Shape::Static => {
-                format!("{key} ch{} cc{} = {}", self.channel, self.controller, self.to)
+                format!(
+                    "{key} ch{} cc{} = {}",
+                    self.channel, self.controller, self.to
+                )
             }
             Shape::Ramp => format!(
                 "{key} ch{} cc{} {}>{} {}",
@@ -267,7 +272,9 @@ impl Default for Engine {
 
 impl Engine {
     pub fn new() -> Self {
-        Self { slots: vec![Slot::default(); SLOTS] }
+        Self {
+            slots: vec![Slot::default(); SLOTS],
+        }
     }
 
     /// Whether anything is mid-ramp, i.e. whether [`Engine::tick`] has work.
@@ -303,7 +310,9 @@ impl Engine {
     pub fn tick(&mut self, now: Instant) -> Vec<Message> {
         let mut messages = Vec::new();
         for slot in 0..self.slots.len() {
-            let Some(ramp) = self.slots[slot].ramp else { continue };
+            let Some(ramp) = self.slots[slot].ramp else {
+                continue;
+            };
             let (value, arrived) = ramp.value_at(now);
             if arrived {
                 self.slots[slot].ramp = None;
@@ -324,7 +333,14 @@ impl Engine {
 
     /// Heads for the binding's `to`.
     fn travel_out(&mut self, slot: usize, binding: &Binding, now: Instant) -> Option<Message> {
-        self.start(slot, binding, binding.from, binding.to, binding.duration(), now)
+        self.start(
+            slot,
+            binding,
+            binding.from,
+            binding.to,
+            binding.duration(),
+            now,
+        )
     }
 
     /// Heads back to the binding's `from`, from wherever the slot actually is.
@@ -372,7 +388,11 @@ impl Engine {
             return None;
         }
         self.slots[slot].sent = Some(value);
-        Some(Message { channel, controller, value })
+        Some(Message {
+            channel,
+            controller,
+            value,
+        })
     }
 
     fn latched(&self, slot: usize) -> bool {
@@ -406,9 +426,17 @@ mod tests {
 
     #[test]
     fn a_status_byte_carries_the_channel_counted_from_one() {
-        let message = Message { channel: 1, controller: 74, value: 64 };
+        let message = Message {
+            channel: 1,
+            controller: 74,
+            value: 64,
+        };
         assert_eq!(message.bytes(), [0xB0, 74, 64]);
-        let message = Message { channel: 16, controller: 1, value: 127 };
+        let message = Message {
+            channel: 16,
+            controller: 1,
+            value: 127,
+        };
         assert_eq!(message.bytes(), [0xBF, 1, 127]);
     }
 
@@ -424,7 +452,11 @@ mod tests {
         let now = Instant::now();
         assert_eq!(
             engine.press(0, &binding, now),
-            Some(Message { channel: 1, controller: 11, value: 64 })
+            Some(Message {
+                channel: 1,
+                controller: 11,
+                value: 64
+            })
         );
         assert_eq!(engine.release(0, &binding, now), None);
         assert!(engine.tick(now).is_empty());
@@ -468,7 +500,9 @@ mod tests {
         let mut engine = Engine::new();
         let start = Instant::now();
 
-        let first = engine.press(0, &binding, start).expect("the starting value");
+        let first = engine
+            .press(0, &binding, start)
+            .expect("the starting value");
         assert_eq!((first.channel, first.controller, first.value), (2, 74, 0));
         assert!(engine.is_active());
 
@@ -497,7 +531,10 @@ mod tests {
         let linear = midpoint(Curve::Linear);
         let log = midpoint(Curve::Log);
         assert_eq!(linear, 50);
-        assert!(log > linear, "log at the midpoint was {log}, linear was {linear}");
+        assert!(
+            log > linear,
+            "log at the midpoint was {log}, linear was {linear}"
+        );
         assert_eq!(Curve::Log.ease(0.0), 0.0);
         assert_eq!(Curve::Log.ease(1.0), 1.0);
     }
@@ -512,8 +549,20 @@ mod tests {
         assert_eq!(engine.tick(quarter).last().map(|m| m.value), Some(25));
 
         engine.release(0, &binding, quarter);
-        assert_eq!(engine.tick(quarter + Duration::from_millis(125)).last().map(|m| m.value), Some(13));
-        assert_eq!(engine.tick(quarter + Duration::from_millis(250)).last().map(|m| m.value), Some(0));
+        assert_eq!(
+            engine
+                .tick(quarter + Duration::from_millis(125))
+                .last()
+                .map(|m| m.value),
+            Some(13)
+        );
+        assert_eq!(
+            engine
+                .tick(quarter + Duration::from_millis(250))
+                .last()
+                .map(|m| m.value),
+            Some(0)
+        );
         assert!(!engine.is_active());
     }
 
@@ -526,8 +575,20 @@ mod tests {
         let half = start + Duration::from_millis(500);
         engine.tick(half);
         assert_eq!(engine.press(0, &binding, half).map(|m| m.value), Some(0));
-        assert_eq!(engine.tick(half + Duration::from_millis(500)).last().map(|m| m.value), Some(50));
-        assert_eq!(engine.tick(half + Duration::from_millis(1000)).last().map(|m| m.value), Some(100));
+        assert_eq!(
+            engine
+                .tick(half + Duration::from_millis(500))
+                .last()
+                .map(|m| m.value),
+            Some(50)
+        );
+        assert_eq!(
+            engine
+                .tick(half + Duration::from_millis(1000))
+                .last()
+                .map(|m| m.value),
+            Some(100)
+        );
     }
 
     #[test]

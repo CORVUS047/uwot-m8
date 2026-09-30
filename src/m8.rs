@@ -56,7 +56,9 @@ pub fn find_devices() -> Vec<String> {
 /// The stable by-id symlinks the kernel creates, which name the device.
 #[cfg(target_os = "linux")]
 fn fallback_devices() -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir("/dev/serial/by-id") else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir("/dev/serial/by-id") else {
+        return Vec::new();
+    };
     entries
         .flatten()
         .filter(|entry| entry.file_name().to_string_lossy().contains("M8"))
@@ -67,10 +69,17 @@ fn fallback_devices() -> Vec<String> {
 /// macOS names these `cu.usbmodem` and a number, with no hint of what they are.
 #[cfg(target_os = "macos")]
 fn fallback_devices() -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir("/dev") else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir("/dev") else {
+        return Vec::new();
+    };
     entries
         .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with("cu.usbmodem"))
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("cu.usbmodem")
+        })
         .map(|entry| entry.path().to_string_lossy().to_string())
         .collect()
 }
@@ -127,7 +136,13 @@ impl M8 {
             })
             .map_err(|e| format!("cannot start serial thread: {e}"))?;
 
-        Ok(Self { port, packets, stop, reader: Some(reader), path: path.to_string() })
+        Ok(Self {
+            port,
+            packets,
+            stop,
+            reader: Some(reader),
+            path: path.to_string(),
+        })
     }
 
     /// Drains everything the read thread has decoded so far.

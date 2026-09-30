@@ -99,7 +99,11 @@ fn readable(fg: Rgb, bg: Rgb) -> Rgb {
     if luma(bg) > 127 {
         Rgb { r: 0, g: 0, b: 0 }
     } else {
-        Rgb { r: 255, g: 255, b: 255 }
+        Rgb {
+            r: 255,
+            g: 255,
+            b: 255,
+        }
     }
 }
 
@@ -242,7 +246,11 @@ impl TextScreen {
         let model_02 = info.is_model_02();
         if model_02 != self.is_model_02 || self.font_mode.is_none() {
             self.is_model_02 = model_02;
-            let (w, h) = if model_02 { MODEL_02_SIZE } else { MODEL_01_SIZE };
+            let (w, h) = if model_02 {
+                MODEL_02_SIZE
+            } else {
+                MODEL_01_SIZE
+            };
             self.width_px = w as usize;
             self.height_px = h as usize;
             self.reshape();
@@ -300,8 +308,12 @@ impl TextScreen {
         let cell_top = (y + self.metrics.text_offset_y).max(0) as usize;
         self.learn_grid(c.x as usize, cell_top);
 
-        let Some(col) = self.grid_x.index(c.x as usize) else { return };
-        let Some(row) = self.grid_y.index(cell_top) else { return };
+        let Some(col) = self.grid_x.index(c.x as usize) else {
+            return;
+        };
+        let Some(row) = self.grid_y.index(cell_top) else {
+            return;
+        };
         if col >= self.cols || row >= self.rows {
             return;
         }
@@ -385,11 +397,23 @@ impl TextScreen {
                 Some((cols, rows)) => {
                     let touched = Span {
                         cols: self.grid_x.index_clamped(bounds.0.max(0) as usize)
-                            ..=self.grid_x.index_clamped(bounds.2.max(0) as usize).min(self.cols - 1),
+                            ..=self
+                                .grid_x
+                                .index_clamped(bounds.2.max(0) as usize)
+                                .min(self.cols - 1),
                         rows: self.grid_y.index_clamped(bounds.1.max(0) as usize)
-                            ..=self.grid_y.index_clamped(bounds.3.max(0) as usize).min(self.rows - 1),
+                            ..=self
+                                .grid_y
+                                .index_clamped(bounds.3.max(0) as usize)
+                                .min(self.rows - 1),
                     };
-                    self.move_cursor(Cursor { highlight: Span { cols, rows }, touched }, run[0].color);
+                    self.move_cursor(
+                        Cursor {
+                            highlight: Span { cols, rows },
+                            touched,
+                        },
+                        run[0].color,
+                    );
                 }
                 None => leftovers.extend_from_slice(run),
             }
@@ -449,7 +473,10 @@ impl TextScreen {
         &self,
         run: &[Fragment],
         (x0, y0, x1, y1): (i32, i32, i32, i32),
-    ) -> Option<(std::ops::RangeInclusive<usize>, std::ops::RangeInclusive<usize>)> {
+    ) -> Option<(
+        std::ops::RangeInclusive<usize>,
+        std::ops::RangeInclusive<usize>,
+    )> {
         if run.len() > MAX_CURSOR_FRAGMENTS {
             return None;
         }
@@ -480,7 +507,9 @@ impl TextScreen {
 
         for row in cursor.highlight.rows.clone() {
             for col in cursor.highlight.cols.clone() {
-                let Some(cell) = self.cells.get_mut(row * self.cols + col) else { continue };
+                let Some(cell) = self.cells.get_mut(row * self.cols + col) else {
+                    continue;
+                };
                 if cell.highlight != Some(color) {
                     cell.highlight = Some(color);
                     self.dirty = true;
@@ -494,7 +523,9 @@ impl TextScreen {
     fn scrub(&mut self, span: &Span) {
         for row in span.rows.clone() {
             for col in span.cols.clone() {
-                let Some(cell) = self.cells.get_mut(row * self.cols + col) else { continue };
+                let Some(cell) = self.cells.get_mut(row * self.cols + col) else {
+                    continue;
+                };
                 if cell.highlight.is_some() || cell.ink != 0 {
                     cell.highlight = None;
                     cell.ink = 0;
@@ -505,7 +536,11 @@ impl TextScreen {
     }
 
     fn draw_waveform(&mut self, w: &Waveform) {
-        let len = if w.samples.is_empty() { self.prev_waveform_len } else { w.samples.len() };
+        let len = if w.samples.is_empty() {
+            self.prev_waveform_len
+        } else {
+            w.samples.len()
+        };
         self.prev_waveform_len = w.samples.len();
         if len == 0 {
             return;
@@ -527,7 +562,9 @@ impl TextScreen {
     fn paint_solid(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, color: Rgb) {
         let cols = self.grid_x.cells_for(x0, x1 - 1, self.cols);
         let rows = self.grid_y.cells_for(y0, y1 - 1, self.rows);
-        let (Some(cols), Some(rows)) = (cols, rows) else { return };
+        let (Some(cols), Some(rows)) = (cols, rows) else {
+            return;
+        };
 
         for row in rows {
             for col in cols.clone() {
@@ -539,7 +576,10 @@ impl TextScreen {
                 let updated = if covers_cell {
                     Cell::blank(color)
                 } else {
-                    Cell { mark: Some((Mark::Block, color)), ..*cell }
+                    Cell {
+                        mark: Some((Mark::Block, color)),
+                        ..*cell
+                    }
                 };
                 if *cell != updated {
                     *cell = updated;
@@ -553,7 +593,9 @@ impl TextScreen {
     fn mark_cells(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, mark: Mark, color: Rgb) {
         let cols = self.grid_x.cells_for(x0, x1, self.cols);
         let rows = self.grid_y.cells_for(y0, y1, self.rows);
-        let (Some(cols), Some(rows)) = (cols, rows) else { return };
+        let (Some(cols), Some(rows)) = (cols, rows) else {
+            return;
+        };
 
         for row in rows {
             for col in cols.clone() {
@@ -571,8 +613,7 @@ impl TextScreen {
         if x < 0 || y < 0 {
             return;
         }
-        let (Some(col), Some(row)) =
-            (self.grid_x.index(x as usize), self.grid_y.index(y as usize))
+        let (Some(col), Some(row)) = (self.grid_x.index(x as usize), self.grid_y.index(y as usize))
         else {
             return;
         };
@@ -601,7 +642,9 @@ impl TextScreen {
     fn clear_area(&mut self, x0: i32, y0: i32, x1: i32, y1: i32) {
         let cols = self.grid_x.cells_for(x0, x1 - 1, self.cols);
         let rows = self.grid_y.cells_for(y0, y1 - 1, self.rows);
-        let (Some(cols), Some(rows)) = (cols, rows) else { return };
+        let (Some(cols), Some(rows)) = (cols, rows) else {
+            return;
+        };
         let background = self.background;
 
         for row in rows {
@@ -682,7 +725,10 @@ impl Axis {
             }
             previous = Some(position);
         }
-        counts.into_iter().max_by_key(|&(gap, count)| (count, std::cmp::Reverse(gap))).map(|(gap, _)| gap)
+        counts
+            .into_iter()
+            .max_by_key(|&(gap, count)| (count, std::cmp::Reverse(gap)))
+            .map(|(gap, _)| gap)
     }
 
     /// True once a coordinate has been seen, so the phase is known.
@@ -697,7 +743,9 @@ impl Axis {
 
     /// Cell index containing `position`, or None if it is before the grid.
     fn index(&self, position: usize) -> Option<usize> {
-        position.checked_sub(self.origin()).map(|offset| offset / self.pitch)
+        position
+            .checked_sub(self.origin())
+            .map(|offset| offset / self.pitch)
     }
 
     fn index_clamped(&self, position: usize) -> usize {
@@ -710,12 +758,7 @@ impl Axis {
     }
 
     /// The cells a pixel span `lo..=hi` occupies.
-    fn cells_for(
-        &self,
-        lo: i32,
-        hi: i32,
-        count: usize,
-    ) -> Option<std::ops::RangeInclusive<usize>> {
+    fn cells_for(&self, lo: i32, hi: i32, count: usize) -> Option<std::ops::RangeInclusive<usize>> {
         if count == 0 || hi < 0 {
             return None;
         }
@@ -754,7 +797,9 @@ impl Axis {
     ) -> Option<std::ops::RangeInclusive<usize>> {
         let centre = |index: usize| (self.start_of(index) + self.pitch / 2) as i32;
         let first = (0..count).find(|&index| centre(index) >= x0)?;
-        let last = (first..count).take_while(|&index| centre(index) <= x1).last()?;
+        let last = (first..count)
+            .take_while(|&index| centre(index) <= x1)
+            .last()?;
         Some(first..=last)
     }
 }
@@ -812,8 +857,16 @@ mod tests {
     use crate::proto::{Char, Rect, Waveform};
 
     const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
-    const WHITE: Rgb = Rgb { r: 255, g: 255, b: 255 };
-    const CURSOR: Rgb = Rgb { r: 88, g: 140, b: 168 };
+    const WHITE: Rgb = Rgb {
+        r: 255,
+        g: 255,
+        b: 255,
+    };
+    const CURSOR: Rgb = Rgb {
+        r: 88,
+        g: 140,
+        b: 168,
+    };
 
     /// A screen set up the way a Model:02 in its large font reports itself.
     fn model_02() -> TextScreen {
@@ -827,7 +880,13 @@ mod tests {
     }
 
     fn text(screen: &mut TextScreen, c: u8, x: u16, y: u16) {
-        screen.apply(&Command::Char(Char { c, x, y, fg: WHITE, bg: BLACK }));
+        screen.apply(&Command::Char(Char {
+            c,
+            x,
+            y,
+            fg: WHITE,
+            bg: BLACK,
+        }));
     }
 
     fn rect(screen: &mut TextScreen, x: u16, y: u16, w: u16, h: u16, color: Rgb) {
@@ -889,8 +948,16 @@ mod tests {
         cursor_brackets(&mut screen, CURSOR);
         screen.flush();
         for col in 6..=9 {
-            assert_eq!(screen.glyph_at(col, 6).0, ' ', "column {col} kept bracket ink");
-            assert_eq!(screen.glyph_at(col, 7).0, ' ', "column {col} inked the row below");
+            assert_eq!(
+                screen.glyph_at(col, 6).0,
+                ' ',
+                "column {col} kept bracket ink"
+            );
+            assert_eq!(
+                screen.glyph_at(col, 7).0,
+                ' ',
+                "column {col} inked the row below"
+            );
         }
     }
 
@@ -900,7 +967,13 @@ mod tests {
         text(&mut screen, b'x', 0, 84);
         cursor_brackets(&mut screen, CURSOR);
         screen.flush();
-        screen.apply(&Command::Char(Char { c: b'7', x: 84, y: 84, fg: CURSOR, bg: BLACK }));
+        screen.apply(&Command::Char(Char {
+            c: b'7',
+            x: 84,
+            y: 84,
+            fg: CURSOR,
+            bg: BLACK,
+        }));
 
         let (ch, fg, bg) = screen.glyph_at(7, 6);
         assert_eq!(ch, '7');
@@ -918,11 +991,21 @@ mod tests {
 
         screen.dirty = false;
         for shade in [96, 104, 112, 120] {
-            cursor_brackets(&mut screen, Rgb { r: shade, g: 200, b: 240 });
+            cursor_brackets(
+                &mut screen,
+                Rgb {
+                    r: shade,
+                    g: 200,
+                    b: 240,
+                },
+            );
             screen.flush();
         }
         assert_eq!(screen.cell(7, 6).highlight, Some(CURSOR));
-        assert!(!screen.dirty, "a breathing cursor kept marking the screen dirty");
+        assert!(
+            !screen.dirty,
+            "a breathing cursor kept marking the screen dirty"
+        );
     }
 
     #[test]
@@ -945,7 +1028,11 @@ mod tests {
         }
         screen.flush();
 
-        assert_eq!(screen.cell(7, 6).highlight, None, "old position stayed highlighted");
+        assert_eq!(
+            screen.cell(7, 6).highlight,
+            None,
+            "old position stayed highlighted"
+        );
         assert_eq!(screen.cell(7, 7).highlight, Some(CURSOR));
     }
 
@@ -953,14 +1040,20 @@ mod tests {
     fn a_panel_frame_is_dropped_rather_than_highlighted() {
         let mut screen = model_02();
         text(&mut screen, b'x', 0, 84);
-        for (x, y, w, h) in
-            [(408, 224, 57, 1), (408, 225, 1, 19), (464, 225, 1, 19), (409, 244, 55, 1)]
-        {
+        for (x, y, w, h) in [
+            (408, 224, 57, 1),
+            (408, 225, 1, 19),
+            (464, 225, 1, 19),
+            (409, 244, 55, 1),
+        ] {
             rect(&mut screen, x, y, w, h, CURSOR);
         }
         screen.flush();
         assert!(screen.cells.iter().all(|cell| cell.highlight.is_none()));
-        assert!(screen.cells.iter().all(|cell| cell.mark.is_none() && cell.ink == 0));
+        assert!(screen
+            .cells
+            .iter()
+            .all(|cell| cell.mark.is_none() && cell.ink == 0));
     }
 
     #[test]
@@ -968,7 +1061,10 @@ mod tests {
         let mut screen = model_02();
         cursor_brackets(&mut screen, CURSOR);
         screen.flush();
-        assert!(screen.cells.iter().all(|cell| cell.highlight.is_none() && cell.ink == 0));
+        assert!(screen
+            .cells
+            .iter()
+            .all(|cell| cell.highlight.is_none() && cell.ink == 0));
 
         text(&mut screen, b'2', 84, 84);
         screen.flush();
@@ -1034,8 +1130,16 @@ mod tests {
     fn the_volume_bars_become_a_row_of_blocks_each() {
         let mut screen = model_02();
         text(&mut screen, b'x', 84, 84);
-        let left = Rgb { r: 10, g: 200, b: 10 };
-        let right = Rgb { r: 200, g: 10, b: 10 };
+        let left = Rgb {
+            r: 10,
+            g: 200,
+            b: 10,
+        };
+        let right = Rgb {
+            r: 200,
+            g: 10,
+            b: 10,
+        };
         rect(&mut screen, 408, 42, 49, 7, left);
         rect(&mut screen, 408, 49, 49, 7, right);
         screen.flush();
@@ -1056,11 +1160,26 @@ mod tests {
         rect(&mut screen, 408, 42, 49, 7, BLACK);
         rect(&mut screen, 408, 49, 49, 7, BLACK);
         for (step, x) in (409..=450).enumerate() {
-            let shade = Rgb { r: 248 - step as u8 * 3, g: 4 + step as u8 * 5, b: 216 };
+            let shade = Rgb {
+                r: 248 - step as u8 * 3,
+                g: 4 + step as u8 * 5,
+                b: 216,
+            };
             rect(&mut screen, x, 42, 1, 6, shade);
             rect(&mut screen, x, 49, 1, 6, shade);
         }
-        rect(&mut screen, 456, 42, 1, 6, Rgb { r: 192, g: 208, b: 224 });
+        rect(
+            &mut screen,
+            456,
+            42,
+            1,
+            6,
+            Rgb {
+                r: 192,
+                g: 208,
+                b: 224,
+            },
+        );
         screen.flush();
 
         for row in [2, 3] {
@@ -1081,22 +1200,55 @@ mod tests {
         let mut screen = model_02();
         text(&mut screen, b'x', 84, 84);
         for x in [409, 421, 433] {
-            rect(&mut screen, x, 49, 1, 6, Rgb { r: 248, g: 4, b: 216 });
+            rect(
+                &mut screen,
+                x,
+                49,
+                1,
+                6,
+                Rgb {
+                    r: 248,
+                    g: 4,
+                    b: 216,
+                },
+            );
         }
         screen.flush();
-        assert!(screen.cells.iter().all(|cell| cell.mark.is_none() && cell.ink == 0));
+        assert!(screen
+            .cells
+            .iter()
+            .all(|cell| cell.mark.is_none() && cell.ink == 0));
     }
 
     #[test]
     fn the_battery_gauge_is_dropped() {
         let mut screen = model_02();
         text(&mut screen, b'x', 84, 84);
-        rect(&mut screen, 408, 63, 15, 5, Rgb { r: 40, g: 40, b: 40 });
-        for (x, y, w, h) in [(409, 63, 13, 1), (409, 64, 12, 2), (409, 66, 13, 1), (422, 64, 1, 2)] {
+        rect(
+            &mut screen,
+            408,
+            63,
+            15,
+            5,
+            Rgb {
+                r: 40,
+                g: 40,
+                b: 40,
+            },
+        );
+        for (x, y, w, h) in [
+            (409, 63, 13, 1),
+            (409, 64, 12, 2),
+            (409, 66, 13, 1),
+            (422, 64, 1, 2),
+        ] {
             rect(&mut screen, x, y, w, h, CURSOR);
         }
         screen.flush();
-        assert!(screen.cells.iter().all(|cell| cell.mark.is_none() && cell.ink == 0));
+        assert!(screen
+            .cells
+            .iter()
+            .all(|cell| cell.mark.is_none() && cell.ink == 0));
     }
 
     #[test]
@@ -1116,7 +1268,10 @@ mod tests {
             .filter(|&(col, row)| screen.cell(col, row).mark.is_some())
             .collect();
         let rows: Vec<usize> = marked.iter().map(|&(_, row)| row).collect();
-        assert!(rows.windows(2).all(|w| w[0] == w[1]), "keys spread over rows: {marked:?}");
+        assert!(
+            rows.windows(2).all(|w| w[0] == w[1]),
+            "keys spread over rows: {marked:?}"
+        );
         let cols: Vec<usize> = marked.iter().map(|&(col, _)| col).collect();
         assert_eq!(cols, vec![34, 35, 36, 37, 38]);
     }

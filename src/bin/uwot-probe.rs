@@ -25,7 +25,14 @@ fn play_audio(seconds: u64) -> Result<(), String> {
 fn watch_pads(seconds: u64) -> Result<(), String> {
     let mut pads = pad::Pads::new();
     let status = pads.status();
-    println!("{}", if status.is_empty() { "no controllers".into() } else { status });
+    println!(
+        "{}",
+        if status.is_empty() {
+            "no controllers".into()
+        } else {
+            status
+        }
+    );
     println!("press buttons for {seconds}s");
 
     let deadline = Instant::now() + Duration::from_secs(seconds);
@@ -67,9 +74,16 @@ fn send_ramp(port_name: &str, seconds: u64) -> Result<(), String> {
     let mut engine = cc::Engine::new();
     let mut sent = 0usize;
     let send = |port: &mut midi::Port, message: Option<cc::Message>| -> Result<(), String> {
-        let Some(message) = message else { return Ok(()) };
+        let Some(message) = message else {
+            return Ok(());
+        };
         port.send(message)?;
-        println!("cc {} = {} {:02X?}", message.controller, message.value, message.bytes());
+        println!(
+            "cc {} = {} {:02X?}",
+            message.controller,
+            message.value,
+            message.bytes()
+        );
         Ok(())
     };
 
@@ -262,9 +276,17 @@ pub fn dump_text(seconds: u64) -> Result<(), String> {
     println!("grid {}x{}", screen.cols, screen.rows);
     println!("+{}+", "-".repeat(screen.cols));
     for row in 0..screen.rows {
-        let line: String = (0..screen.cols).map(|col| screen.glyph_at(col, row).0).collect();
+        let line: String = (0..screen.cols)
+            .map(|col| screen.glyph_at(col, row).0)
+            .collect();
         let marks: String = (0..screen.cols)
-            .map(|col| if screen.cell(col, row).highlight.is_some() { '#' } else { ' ' })
+            .map(|col| {
+                if screen.cell(col, row).highlight.is_some() {
+                    '#'
+                } else {
+                    ' '
+                }
+            })
             .collect();
         if marks.trim().is_empty() {
             println!("|{line}|");
@@ -302,7 +324,10 @@ pub fn dump_rects(seconds: u64) -> Result<(), String> {
     const PITCH_Y: u16 = 14;
     const PHASE_Y: i32 = 8;
 
-    println!("{:>4} {:>4} {:>4} {:>4}  {:>15}  {:>9}  {:>9} count", "x", "y", "w", "h", "rgb", "cols", "rows");
+    println!(
+        "{:>4} {:>4} {:>4} {:>4}  {:>15}  {:>9}  {:>9} count",
+        "x", "y", "w", "h", "rgb", "cols", "rows"
+    );
     for ((x, y, w, h, r, g, b), count) in &counts {
         let top = *y as i32 - 2 - PHASE_Y;
         let bottom = top + *h as i32 - 1;
@@ -310,7 +335,11 @@ pub fn dump_rects(seconds: u64) -> Result<(), String> {
             "{x:>4} {y:>4} {w:>4} {h:>4}  {:>15}  {:>9}  {:>9} {count}",
             format!("{r:3},{g:3},{b:3}"),
             format!("{}..{}", x / PITCH_X, (x + w - 1) / PITCH_X),
-            format!("{}..{}", top.div_euclid(PITCH_Y as i32), bottom.div_euclid(PITCH_Y as i32)),
+            format!(
+                "{}..{}",
+                top.div_euclid(PITCH_Y as i32),
+                bottom.div_euclid(PITCH_Y as i32)
+            ),
         );
     }
     println!("\n{} distinct rectangles", counts.len());

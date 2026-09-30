@@ -78,14 +78,18 @@ impl Outputs {
 
     /// Sends whatever a control-change binding's key going down calls for.
     pub fn press(&mut self, slot: usize, config: &Config) {
-        let Some(binding) = config.cc.get(slot) else { return };
+        let Some(binding) = config.cc.get(slot) else {
+            return;
+        };
         let message = self.engine.press(slot, binding, Instant::now());
         self.send(message);
     }
 
     /// And its key coming up, which for a gate is the way back.
     pub fn release(&mut self, slot: usize, config: &Config) {
-        let Some(binding) = config.cc.get(slot) else { return };
+        let Some(binding) = config.cc.get(slot) else {
+            return;
+        };
         let message = self.engine.release(slot, binding, Instant::now());
         self.send(message);
     }
@@ -110,7 +114,9 @@ impl Outputs {
 
     fn send(&mut self, message: Option<cc::Message>) {
         let Some(message) = message else { return };
-        let Some(port) = self.port.as_mut() else { return };
+        let Some(port) = self.port.as_mut() else {
+            return;
+        };
         if let Err(e) = port.send(message) {
             self.message = Some(e);
         }

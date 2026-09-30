@@ -76,7 +76,11 @@ fn u16le(data: &[u8], at: usize) -> u16 {
 }
 
 fn rgb(data: &[u8], at: usize) -> Rgb {
-    Rgb { r: data[at], g: data[at + 1], b: data[at + 2] }
+    Rgb {
+        r: data[at],
+        g: data[at + 1],
+        b: data[at + 2],
+    }
 }
 
 /// Parses one SLIP frame.
@@ -91,7 +95,13 @@ pub fn parse(data: &[u8], last_color: Rgb) -> Result<Command, String> {
                 12 => (u16le(data, 5), u16le(data, 7), rgb(data, 9)),
                 n => return Err(format!("draw rectangle: bad length {n}")),
             };
-            Ok(Command::Rect(Rect { x: u16le(data, 1), y: u16le(data, 3), w, h, color }))
+            Ok(Command::Rect(Rect {
+                x: u16le(data, 1),
+                y: u16le(data, 3),
+                w,
+                h,
+                color,
+            }))
         }
         0xFD => {
             if data.len() != 12 {

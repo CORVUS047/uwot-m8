@@ -158,7 +158,9 @@ impl Button {
     }
 
     fn from_config_key(key: &str) -> Option<Self> {
-        Button::ALL.into_iter().find(|button| button.config_key() == key)
+        Button::ALL
+            .into_iter()
+            .find(|button| button.config_key() == key)
     }
 }
 
@@ -182,9 +184,7 @@ impl Default for Bindings {
         Self(
             defaults
                 .into_iter()
-                .map(|(button, keys)| {
-                    (button, keys.iter().map(|k| (*k).to_string()).collect())
-                })
+                .map(|(button, keys)| (button, keys.iter().map(|k| (*k).to_string()).collect()))
                 .collect(),
         )
     }
@@ -192,11 +192,16 @@ impl Default for Bindings {
 
 impl Bindings {
     /// The button a key name presses, if any.
-    pub fn button_for(&self, name: &str) -> Option<u8> {
+    pub fn button_named(&self, name: &str) -> Option<Button> {
         self.0
             .iter()
             .find(|(_, keys)| keys.iter().any(|key| key == name))
-            .map(|(button, _)| button.bit())
+            .map(|(button, _)| *button)
+    }
+
+    /// The same button as the bit it sets in a controller message.
+    pub fn button_for(&self, name: &str) -> Option<u8> {
+        self.button_named(name).map(Button::bit)
     }
 
     /// The keys bound to a button, for display.
@@ -249,15 +254,24 @@ pub struct Changed {
 
 impl Changed {
     fn display() -> Self {
-        Self { display: true, ..Self::default() }
+        Self {
+            display: true,
+            ..Self::default()
+        }
     }
 
     fn audio() -> Self {
-        Self { audio: true, ..Self::default() }
+        Self {
+            audio: true,
+            ..Self::default()
+        }
     }
 
     fn midi() -> Self {
-        Self { midi: true, ..Self::default() }
+        Self {
+            midi: true,
+            ..Self::default()
+        }
     }
 }
 
@@ -268,8 +282,9 @@ pub struct MenuEnv {
 }
 
 /// How the control-change slots are named, in the menu and in the file.
-const CC_LABELS: [&str; cc::SLOTS] =
-    ["CC 1", "CC 2", "CC 3", "CC 4", "CC 5", "CC 6", "CC 7", "CC 8"];
+const CC_LABELS: [&str; cc::SLOTS] = [
+    "CC 1", "CC 2", "CC 3", "CC 4", "CC 5", "CC 6", "CC 7", "CC 8",
+];
 const CC_KEYS: [&str; cc::SLOTS] = ["cc1", "cc2", "cc3", "cc4", "cc5", "cc6", "cc7", "cc8"];
 
 /// One row of a settings menu.
@@ -320,7 +335,12 @@ impl Setting {
 
     /// The windowed frontend's top-level menu.
     pub fn window() -> Vec<Setting> {
-        vec![Setting::Controls, Setting::Audio, Setting::Buttons, Setting::Midi]
+        vec![
+            Setting::Controls,
+            Setting::Audio,
+            Setting::Buttons,
+            Setting::Midi,
+        ]
     }
 
     /// The rows this setting opens, for the rows that open a page.
@@ -431,7 +451,10 @@ impl Default for Config {
 impl fmt::Display for Config {
     /// Writes the config file, comments and all.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "# Settings for uwot-m8 and uwot-tui. Press Escape in either app to")?;
+        writeln!(
+            f,
+            "# Settings for uwot-m8 and uwot-tui. Press Escape in either app to"
+        )?;
         writeln!(f, "# change these.")?;
         writeln!(f, "# show_controls: true or false")?;
         writeln!(f, "show_controls = {}", self.show_controls)?;
@@ -442,29 +465,63 @@ impl fmt::Display for Config {
         writeln!(f, "# audio: play the M8's own output through this computer")?;
         writeln!(f, "audio = {}", self.audio)?;
         writeln!(f)?;
-        writeln!(f, "# Which keys press which M8 buttons. A key is either a single")?;
-        writeln!(f, "# character, a name such as Up, Space, Backspace, LeftShift or F1, or")?;
-        writeln!(f, "# a controller button such as PadSouth, PadUp or PadR1; separate")?;
+        writeln!(
+            f,
+            "# Which keys press which M8 buttons. A key is either a single"
+        )?;
+        writeln!(
+            f,
+            "# character, a name such as Up, Space, Backspace, LeftShift or F1, or"
+        )?;
+        writeln!(
+            f,
+            "# a controller button such as PadSouth, PadUp or PadR1; separate"
+        )?;
         writeln!(f, "# several with commas.")?;
         for button in Button::ALL {
             let keys = self.bindings.0.get(&button).cloned().unwrap_or_default();
             writeln!(f, "{} = {}", button.config_key(), keys.join(","))?;
         }
         writeln!(f)?;
-        writeln!(f, "# The MIDI output the control-change bindings send to, by name; a")?;
+        writeln!(
+            f,
+            "# The MIDI output the control-change bindings send to, by name; a"
+        )?;
         writeln!(f, "# partial name matches, and none sends nothing.")?;
-        writeln!(f, "midi_port = {}", self.midi_port.clone().unwrap_or_else(|| "none".into()))?;
+        writeln!(
+            f,
+            "midi_port = {}",
+            self.midi_port.clone().unwrap_or_else(|| "none".into())
+        )?;
         writeln!(f)?;
-        writeln!(f, "# Control-change bindings, one per slot. A slot with key=none does")?;
+        writeln!(
+            f,
+            "# Control-change bindings, one per slot. A slot with key=none does"
+        )?;
         writeln!(f, "# nothing. Fields:")?;
         writeln!(f, "#   key         the key that fires it")?;
         writeln!(f, "#   channel     1 to 16")?;
         writeln!(f, "#   controller  0 to 127")?;
-        writeln!(f, "#   shape       static (one value) or ramp (travel over time)")?;
-        writeln!(f, "#   trigger     oneshot (press fires it and it finishes on its own),")?;
-        writeln!(f, "#               gate (press goes out, release comes back) or")?;
-        writeln!(f, "#               toggle (press goes out, the next press comes back)")?;
-        writeln!(f, "#   from, to    the resting value and the one a press heads for")?;
+        writeln!(
+            f,
+            "#   shape       static (one value) or ramp (travel over time)"
+        )?;
+        writeln!(
+            f,
+            "#   trigger     oneshot (press fires it and it finishes on its own),"
+        )?;
+        writeln!(
+            f,
+            "#               gate (press goes out, release comes back) or"
+        )?;
+        writeln!(
+            f,
+            "#               toggle (press goes out, the next press comes back)"
+        )?;
+        writeln!(
+            f,
+            "#   from, to    the resting value and the one a press heads for"
+        )?;
         writeln!(f, "#   time        how long a ramp takes, in milliseconds")?;
         writeln!(f, "#   curve       linear or log")?;
         for (slot, binding) in self.cc.iter().enumerate().take(cc::SLOTS) {
@@ -494,7 +551,9 @@ fn write_binding(binding: &Binding) -> String {
 fn parse_binding(value: &str) -> Binding {
     let mut binding = Binding::default();
     for field in value.split(',') {
-        let Some((name, value)) = field.split_once('=') else { continue };
+        let Some((name, value)) = field.split_once('=') else {
+            continue;
+        };
         let (name, value) = (name.trim(), value.trim());
         match name {
             "key" => {
@@ -578,7 +637,9 @@ impl Config {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let Some((key, value)) = line.split_once('=') else { continue };
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
             let (key, value) = (key.trim(), value.trim());
             match key {
                 "show_controls" => match value {
@@ -633,9 +694,19 @@ impl Config {
         self.bindings.button_for(name).map(Bound::Button)
     }
 
+    /// The M8 button a name presses, if it presses one rather than firing a CC.
+    pub fn button_bound(&self, name: &str) -> Option<Button> {
+        match self.bound(name) {
+            Some(Bound::Button(_)) => self.bindings.button_named(name),
+            _ => None,
+        }
+    }
+
     /// The control-change slot a key name fires, if any.
     pub fn cc_slot_for(&self, name: &str) -> Option<usize> {
-        self.cc.iter().position(|binding| binding.key.as_deref() == Some(name))
+        self.cc
+            .iter()
+            .position(|binding| binding.key.as_deref() == Some(name))
     }
 
     /// Binds a key, taking it off whatever else had it: one key, one job.
@@ -851,7 +922,10 @@ fn next_port(current: Option<&str>, ports: &[String], forwards: bool) -> Option<
         }
     }
     let count = choices.len();
-    let at = choices.iter().position(|choice| *choice == current).unwrap_or(0);
+    let at = choices
+        .iter()
+        .position(|choice| *choice == current)
+        .unwrap_or(0);
     let next = if forwards { at + 1 } else { at + count - 1 } % count;
     choices[next].map(str::to_string)
 }
@@ -964,7 +1038,9 @@ mod tests {
 
     #[test]
     fn the_port_row_cycles_through_what_is_plugged_in_plus_none() {
-        let env = MenuEnv { midi_ports: vec!["M8 MIDI 1".into(), "Midi Through".into()] };
+        let env = MenuEnv {
+            midi_ports: vec!["M8 MIDI 1".into(), "Midi Through".into()],
+        };
         let mut config = Config::default();
         assert_eq!(config.adjust(Setting::MidiPort, 1, &env), Changed::midi());
         assert_eq!(config.midi_port.as_deref(), Some("M8 MIDI 1"));
@@ -978,11 +1054,16 @@ mod tests {
 
     #[test]
     fn a_port_that_is_not_plugged_in_is_one_of_the_choices_while_it_is_the_one_set() {
-        let mut config = Config { midi_port: Some("Somewhere else".into()), ..Config::default() };
+        let mut config = Config {
+            midi_port: Some("Somewhere else".into()),
+            ..Config::default()
+        };
         config.adjust(Setting::MidiPort, 1, &MenuEnv::default());
         assert_eq!(config.midi_port, None);
 
-        let env = MenuEnv { midi_ports: vec!["Somewhere else".into()] };
+        let env = MenuEnv {
+            midi_ports: vec!["Somewhere else".into()],
+        };
         config.adjust(Setting::MidiPort, 1, &env);
         assert_eq!(config.midi_port.as_deref(), Some("Somewhere else"));
     }

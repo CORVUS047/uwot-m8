@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::config::{ColorDepth, Config, Theme};
-use crate::keys::{FACE_BUTTONS, FACE_SLOT_COLS, FACE_SLOT_ROWS};
+use crate::keys::{FaceButton, FACE_BUTTONS, FACE_SLOT_COLS, FACE_SLOT_ROWS};
 use crate::proto::Rgb;
 use crate::text::TextScreen;
 
@@ -110,21 +110,64 @@ fn ansi256(c: Rgb) -> u8 {
     }
 }
 
-const KEY_WIDTH: usize = 7;
+const KEY_WIDTH: usize = 6;
+/// Tallest a key is drawn, in rows. Six columns by three rows is about square in
+/// a terminal cell's proportions.
+const KEY_HEIGHT: usize = 3;
 const KEY_GAP: usize = 1;
-/// Blank row between the M8's screen and the keypad.
+/// Blank row between one row of keys and the next. The blocks carry no label,
+/// so without it a column of them runs together into one bar.
+const KEY_ROW_GAP: usize = 1;
+/// How far a nudged key sits off its slot, in cells.
+const KEY_NUDGE: usize = 1;
+/// Blank row between the M8's screen and the keypad. At least a nudge, so the
+/// pair that sits a step up stays off the device's screen.
 const KEYPAD_MARGIN: usize = 1;
 
-const KEY_UP_BG: Rgb = Rgb { r: 38, g: 40, b: 48 };
-const KEY_UP_FG: Rgb = Rgb { r: 150, g: 155, b: 165 };
-const KEY_DOWN_BG: Rgb = Rgb { r: 120, g: 200, b: 240 };
-const KEY_DOWN_FG: Rgb = Rgb { r: 10, g: 12, b: 16 };
+const KEY_UP_BG: Rgb = Rgb {
+    r: 38,
+    g: 40,
+    b: 48,
+};
+const KEY_UP_FG: Rgb = Rgb {
+    r: 150,
+    g: 155,
+    b: 165,
+};
+const KEY_DOWN_BG: Rgb = Rgb {
+    r: 120,
+    g: 200,
+    b: 240,
+};
+const KEY_DOWN_FG: Rgb = Rgb {
+    r: 10,
+    g: 12,
+    b: 16,
+};
 
-const MENU_BG: Rgb = Rgb { r: 24, g: 26, b: 32 };
-const MENU_FG: Rgb = Rgb { r: 220, g: 225, b: 235 };
+const MENU_BG: Rgb = Rgb {
+    r: 24,
+    g: 26,
+    b: 32,
+};
+const MENU_FG: Rgb = Rgb {
+    r: 220,
+    g: 225,
+    b: 235,
+};
 
+/// Columns the keypad needs, the nudge right of the last column included.
 fn keypad_width() -> usize {
-    FACE_SLOT_COLS * (KEY_WIDTH + KEY_GAP) - KEY_GAP
+    FACE_SLOT_COLS * (KEY_WIDTH + KEY_GAP) - KEY_GAP + KEY_NUDGE
+}
+
+/// Rows the keypad needs for a given key height, its blank rows and the nudge
+/// below the bottom row included.
+fn keypad_height(key_height: usize) -> usize {
+    if key_height == 0 {
+        return 0;
+    }
+    FACE_SLOT_ROWS * key_height + (FACE_SLOT_ROWS - 1) * KEY_ROW_GAP + KEYPAD_MARGIN + KEY_NUDGE
 }
 
 /// A lone escape byte is ambiguous until more arrive, or enough time passes.
@@ -219,13 +262,19 @@ impl Terminal {
 
         let mut original: libc::termios = unsafe { std::mem::zeroed() };
         if unsafe { libc::tcgetattr(fd, &mut original) } != 0 {
-            return Err(format!("cannot read terminal settings: {}", io::Error::last_os_error()));
+            return Err(format!(
+                "cannot read terminal settings: {}",
+                io::Error::last_os_error()
+            ));
         }
 
         let mut raw = original;
         unsafe { libc::cfmakeraw(&mut raw) };
         if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
-            return Err(format!("cannot set raw mode: {}", io::Error::last_os_error()));
+            return Err(format!(
+                "cannot set raw mode: {}",
+                io::Error::last_os_error()
+            ));
         }
 
         SAVED_TERMIOS.store(Box::leak(Box::new(original)), Ordering::SeqCst);
@@ -309,6 +358,13 @@ impl Terminal {
         show_controls: bool,
         full: bool,
     ) -> Result<(), String> {
+        // Re-hidden every frame: a terminal that has shown it again for any
+        // reason otherwise leaves it blinking at the end of the last cell
+        // written, which moves with every repaint.
+        self.out
+            .write_all(HIDE_CURSOR.as_bytes())
+            .map_err(|e| e.to_string())?;
+
         let (term_cols, term_rows) = self.size;
         let usable_rows = term_rows;
         let cols = screen.cols.min(term_cols);
@@ -318,14 +374,15 @@ impl Terminal {
         }
 
         let spare = usable_rows - rows;
-        let key_height = match spare {
-            _ if !show_controls || keypad_width() > term_cols => 0,
-            s if s >= FACE_SLOT_ROWS * 2 + KEYPAD_MARGIN => 2,
-            s if s >= FACE_SLOT_ROWS + KEYPAD_MARGIN => 1,
-            _ => 0,
+        let key_height = if show_controls && keypad_width() <= term_cols {
+            (1..=KEY_HEIGHT)
+                .rev()
+                .find(|height| spare >= keypad_height(*height))
+                .unwrap_or(0)
+        } else {
+            0
         };
-        let keypad_rows =
-            if key_height == 0 { 0 } else { FACE_SLOT_ROWS * key_height + KEYPAD_MARGIN };
+        let keypad_rows = keypad_height(key_height);
 
         let content_rows = rows + keypad_rows;
         let origin = ((term_cols - cols) / 2, (usable_rows - content_rows) / 2);
@@ -341,7 +398,11 @@ impl Terminal {
             self.origin = origin;
             self.painted_keys = None;
             let ground = self.sgr(Style {
-                fg: Rgb { r: 255, g: 255, b: 255 },
+                fg: Rgb {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                },
                 bg: screen.background(),
                 reverse: false,
                 device_colors: true,
@@ -433,7 +494,13 @@ impl Terminal {
             .chars()
             .count()
             .max(title.chars().count())
-            .max(rows.iter().map(|row| row.chars().count()).max().unwrap_or(0) + 1)
+            .max(
+                rows.iter()
+                    .map(|row| row.chars().count())
+                    .max()
+                    .unwrap_or(0)
+                    + 1,
+            )
             .max(30)
             .min(term_cols.saturating_sub(2));
 
@@ -467,42 +534,104 @@ impl Terminal {
         rows.push(format!("└{dashes}┘"));
 
         for (offset, row) in rows.iter().enumerate() {
-            write!(self.out, "\x1b[{};{}H{frame}{row}", top + offset + 1, left + 1)
-                .map_err(|e| e.to_string())?;
+            write!(
+                self.out,
+                "\x1b[{};{}H{frame}{row}",
+                top + offset + 1,
+                left + 1
+            )
+            .map_err(|e| e.to_string())?;
         }
         self.out.flush().map_err(|e| e.to_string())?;
-        self.painted.clear();
+        self.forget_region(top, left, rows.len(), inner + 2);
         self.painted_keys = None;
         Ok(())
+    }
+
+    /// Marks the cells a panel covered as unpainted.
+    ///
+    /// Clearing the whole diff instead would make the next frame a full
+    /// repaint, and with the menu open every blink of the M8's cursor is a
+    /// frame, so the screen flickered as fast as the cursor blinked.
+    fn forget_region(&mut self, top: usize, left: usize, height: usize, width: usize) {
+        forget_cells(
+            &mut self.painted,
+            self.painted_cols,
+            self.painted_rows,
+            self.origin,
+            (top, left, height, width),
+        );
     }
 
     /// Draws the face buttons as blocks, arranged as they are on the device.
     fn paint_keypad(&mut self, top: usize, key_height: usize, pressed: u8) -> Result<(), String> {
         let left = self.size.0.saturating_sub(keypad_width()) / 2;
 
-        for (label, button, slot_col, slot_row) in FACE_BUTTONS {
-            let x = left + slot_col * (KEY_WIDTH + KEY_GAP);
-            let y = top + slot_row * key_height;
-            let down = pressed & button != 0;
+        let block = " ".repeat(KEY_WIDTH);
+        for key in &FACE_BUTTONS {
+            let (x, y) = key_at(left, top, key, key_height);
+            let down = pressed & key.mask != 0;
             let (fg, bg) = if down {
                 (KEY_DOWN_FG, KEY_DOWN_BG)
             } else {
                 (KEY_UP_FG, KEY_UP_BG)
             };
-            let colors = self.sgr(Style { fg, bg, reverse: down, device_colors: true });
+            let colors = self.sgr(Style {
+                fg,
+                bg,
+                reverse: down,
+                device_colors: true,
+            });
 
-            let label_row = y + key_height / 2;
             for row in y..y + key_height {
-                let text = if row == label_row {
-                    centre(label, KEY_WIDTH)
-                } else {
-                    " ".repeat(KEY_WIDTH)
-                };
-                write!(self.out, "\x1b[{};{}H{colors}{text}", row + 1, x + 1)
+                write!(self.out, "\x1b[{};{}H{colors}{block}", row + 1, x + 1)
                     .map_err(|e| e.to_string())?;
             }
         }
         Ok(())
+    }
+}
+
+/// A key's top left cell, its nudge off the slot grid applied.
+fn key_at(left: usize, top: usize, key: &FaceButton, key_height: usize) -> (usize, usize) {
+    let nudge = KEY_NUDGE as i32;
+    let cell = |base: usize, step: i32| (base as i32 + step).max(0) as usize;
+    (
+        cell(left + key.col * (KEY_WIDTH + KEY_GAP), key.nudge.0 * nudge),
+        cell(
+            top + key.row * (key_height + KEY_ROW_GAP),
+            key.nudge.1 * nudge,
+        ),
+    )
+}
+
+/// Unpaints the grid cells under a terminal-coordinate rectangle.
+fn forget_cells(
+    painted: &mut [PaintedCell],
+    cols: usize,
+    rows: usize,
+    origin: (usize, usize),
+    (top, left, height, width): (usize, usize, usize, usize),
+) {
+    if painted.len() != cols * rows {
+        return;
+    }
+    for row in top..top + height {
+        let Some(row) = row.checked_sub(origin.1) else {
+            continue;
+        };
+        if row >= rows {
+            break;
+        }
+        for col in left..left + width {
+            let Some(col) = col.checked_sub(origin.0) else {
+                continue;
+            };
+            if col >= cols {
+                break;
+            }
+            painted[row * cols + col] = PaintedCell::default();
+        }
     }
 }
 
@@ -520,15 +649,10 @@ fn trim_to(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_string();
     }
-    text.chars().take(width.saturating_sub(1)).chain(std::iter::once('~')).collect()
-}
-
-/// Pads `text` with spaces so it sits in the middle of `width` columns.
-fn centre(text: &str, width: usize) -> String {
-    let text: String = text.chars().take(width).collect();
-    let padding = width - text.chars().count();
-    let left = padding / 2;
-    format!("{}{text}{}", " ".repeat(left), " ".repeat(padding - left))
+    text.chars()
+        .take(width.saturating_sub(1))
+        .chain(std::iter::once('~'))
+        .collect()
 }
 
 impl Drop for Terminal {
@@ -559,7 +683,11 @@ pub struct Keyboard {
 
 impl Keyboard {
     pub fn new() -> Self {
-        Self { buffer: Vec::new(), buffered_at: Instant::now(), reports_releases: false }
+        Self {
+            buffer: Vec::new(),
+            buffered_at: Instant::now(),
+            reports_releases: false,
+        }
     }
 
     /// True once the terminal has actually sent a key release.
@@ -599,8 +727,11 @@ impl Keyboard {
 /// on a tty stdin and stdout share one file description, so that flag makes
 /// writes fail with EAGAIN as soon as a repaint outruns the terminal.
 fn stdin_ready() -> bool {
-    let mut poll_fd =
-        libc::pollfd { fd: io::stdin().as_raw_fd(), events: libc::POLLIN, revents: 0 };
+    let mut poll_fd = libc::pollfd {
+        fd: io::stdin().as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
     let ready = unsafe { libc::poll(&mut poll_fd, 1, 0) };
     ready > 0 && poll_fd.revents & libc::POLLIN != 0
 }
@@ -652,7 +783,9 @@ fn parse_escape(bytes: &[u8]) -> Escape {
         return Escape::Incomplete;
     }
     if bytes[1] == b'O' {
-        let Some(&letter) = bytes.get(2) else { return Escape::Incomplete };
+        let Some(&letter) = bytes.get(2) else {
+            return Escape::Incomplete;
+        };
         return match ss3_function(letter) {
             Some(key) => Escape::Event(press(key), 3),
             None => Escape::Ignored(3),
@@ -666,7 +799,9 @@ fn parse_escape(bytes: &[u8]) -> Escape {
     }
 
     let mut at = 2;
-    let private = bytes.get(at).is_some_and(|b| matches!(b, b'?' | b'>' | b'<' | b'='));
+    let private = bytes
+        .get(at)
+        .is_some_and(|b| matches!(b, b'?' | b'>' | b'<' | b'='));
     if private {
         at += 1;
     }
@@ -717,13 +852,27 @@ fn parse_escape(bytes: &[u8]) -> Escape {
         _ => return Escape::Ignored(length),
     };
 
-    Escape::Event(KeyEvent { key, kind, shift, alt, ctrl }, length)
+    Escape::Event(
+        KeyEvent {
+            key,
+            kind,
+            shift,
+            alt,
+            ctrl,
+        },
+        length,
+    )
 }
 
 /// Decodes the `modifiers:event-type` field.
 fn decode_modifiers(field: &str) -> (bool, bool, bool, KeyKind) {
     let mut parts = field.split(':');
-    let bits = parts.next().unwrap_or("").parse::<u32>().unwrap_or(1).saturating_sub(1);
+    let bits = parts
+        .next()
+        .unwrap_or("")
+        .parse::<u32>()
+        .unwrap_or(1)
+        .saturating_sub(1);
     let kind = match parts.next().unwrap_or("").parse::<u32>() {
         Ok(2) => KeyKind::Repeat,
         Ok(3) => KeyKind::Release,
@@ -790,7 +939,13 @@ fn legacy_key(byte: u8) -> Option<KeyEvent> {
 }
 
 fn press(key: Key) -> KeyEvent {
-    KeyEvent { key, kind: KeyKind::Press, shift: false, alt: false, ctrl: false }
+    KeyEvent {
+        key,
+        kind: KeyKind::Press,
+        shift: false,
+        alt: false,
+        ctrl: false,
+    }
 }
 
 #[cfg(test)]
@@ -826,7 +981,10 @@ mod tests {
     fn kitty_release_and_repeat_are_distinguished() {
         let (events, _) = feed("\x1b[97;1:1u\x1b[97;1:2u\x1b[97;1:3u", true);
         let kinds: Vec<KeyKind> = events.iter().map(|e| e.kind).collect();
-        assert_eq!(kinds, vec![KeyKind::Press, KeyKind::Repeat, KeyKind::Release]);
+        assert_eq!(
+            kinds,
+            vec![KeyKind::Press, KeyKind::Repeat, KeyKind::Release]
+        );
         assert!(events.iter().all(|e| e.key == Key::Char('a')));
     }
 
@@ -845,7 +1003,13 @@ mod tests {
         let decoded: Vec<Key> = events.iter().map(|e| e.key).collect();
         assert_eq!(
             decoded,
-            vec![Key::Tab, Key::Enter, Key::Escape, Key::Backspace, Key::Delete]
+            vec![
+                Key::Tab,
+                Key::Enter,
+                Key::Escape,
+                Key::Backspace,
+                Key::Delete
+            ]
         );
     }
 
@@ -886,6 +1050,39 @@ mod tests {
         assert_eq!(events[1].kind, KeyKind::Release);
     }
 
+    /// The blank rows between key rows have to be counted, or the keypad is
+    /// given less room than it draws into and runs over the row below it.
+    #[test]
+    fn the_keypad_asks_for_the_rows_it_actually_draws() {
+        assert_eq!(keypad_height(0), 0);
+        for height in 1..=KEY_HEIGHT {
+            // Every key, the pair nudged below the grid included, lands inside
+            // the room asked for; the pair nudged up stays off the M8's screen.
+            let lowest = FACE_BUTTONS
+                .iter()
+                .map(|key| key_at(0, KEYPAD_MARGIN, key, height).1 + height)
+                .max()
+                .unwrap();
+            assert!(lowest <= keypad_height(height), "{lowest} past {height}");
+            // The step up has to fit inside the margin, or the pair taking it
+            // is drawn over the bottom row of the M8's own screen.
+            assert!(KEY_NUDGE <= KEYPAD_MARGIN);
+            let highest = FACE_BUTTONS
+                .iter()
+                .map(|key| key_at(0, KEYPAD_MARGIN, key, height).1)
+                .min()
+                .unwrap();
+            assert_eq!(highest, KEYPAD_MARGIN - KEY_NUDGE);
+        }
+
+        let widest = FACE_BUTTONS
+            .iter()
+            .map(|key| key_at(0, 0, key, 1).0 + KEY_WIDTH)
+            .max()
+            .unwrap();
+        assert_eq!(widest, keypad_width());
+    }
+
     #[test]
     fn a_menu_taller_than_the_terminal_scrolls_to_keep_the_selection_in_view() {
         assert_eq!(visible_rows(5, 3, 10), (0, 5));
@@ -893,6 +1090,42 @@ mod tests {
         assert_eq!(visible_rows(11, 0, 6), (0, 6));
         assert_eq!(visible_rows(11, 10, 6), (5, 6));
         assert_eq!(visible_rows(11, 0, 0), (0, 11));
+    }
+
+    /// Only the cells the panel covered, so the next frame is not a full
+    /// repaint of the screen.
+    #[test]
+    fn a_panel_unpaints_the_cells_it_covered_and_no_others() {
+        let painted_cell = PaintedCell {
+            ch: 'x',
+            style: Style {
+                fg: Rgb::default(),
+                bg: Rgb::default(),
+                reverse: false,
+                device_colors: true,
+            },
+        };
+        let mut painted = vec![painted_cell; 10 * 6];
+        // A 4x2 panel at terminal (3, 2), on a grid whose origin is (1, 1).
+        forget_cells(&mut painted, 10, 6, (1, 1), (3, 2, 2, 4));
+
+        let forgotten: Vec<usize> = painted
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| **cell == PaintedCell::default())
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(forgotten, vec![21, 22, 23, 24, 31, 32, 33, 34]);
+    }
+
+    #[test]
+    fn a_panel_past_the_edge_of_the_grid_is_clipped_not_a_panic() {
+        let mut painted = vec![PaintedCell::default(); 4 * 3];
+        forget_cells(&mut painted, 4, 3, (2, 2), (0, 0, 40, 40));
+        forget_cells(&mut painted, 4, 3, (0, 0), (100, 100, 4, 4));
+        // A stale buffer is left alone rather than indexed into.
+        let mut short = vec![PaintedCell::default(); 3];
+        forget_cells(&mut short, 4, 3, (0, 0), (0, 0, 2, 2));
     }
 
     #[test]
@@ -931,9 +1164,23 @@ mod tests {
     #[test]
     fn colour_approximation_lands_on_the_right_ranges() {
         assert_eq!(ansi256(Rgb { r: 0, g: 0, b: 0 }), 16);
-        assert_eq!(ansi256(Rgb { r: 255, g: 255, b: 255 }), 231);
-        let mid_gray = ansi256(Rgb { r: 128, g: 128, b: 128 });
-        assert!((232..=255).contains(&mid_gray), "expected grayscale ramp, got {mid_gray}");
+        assert_eq!(
+            ansi256(Rgb {
+                r: 255,
+                g: 255,
+                b: 255
+            }),
+            231
+        );
+        let mid_gray = ansi256(Rgb {
+            r: 128,
+            g: 128,
+            b: 128,
+        });
+        assert!(
+            (232..=255).contains(&mid_gray),
+            "expected grayscale ramp, got {mid_gray}"
+        );
         let red = ansi256(Rgb { r: 255, g: 0, b: 0 });
         assert_eq!(red, 16 + 36 * 5);
     }
