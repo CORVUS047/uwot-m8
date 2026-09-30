@@ -21,6 +21,10 @@ in theory, but I do not have those and have not tested it.
 
 ## Installing
 
+Tagged releases carry prebuilt binaries: Linux and macOS on x86_64 and arm64,
+Windows on x86_64. See [Releases](../../releases), and the `INSTALL.txt` inside
+the archive. To build it yourself instead:
+
 ### Linux
 
 Needs Rust, `libudev` (serial enumeration), ALSA (`libasound`, for audio and

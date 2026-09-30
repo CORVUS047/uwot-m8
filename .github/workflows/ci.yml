@@ -1,0 +1,80 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Nothing here is a debugger's build; the symbols are just bytes to move.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --check
+
+  test:
+    name: test ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # SDL2 comes from apt, as it does for anyone installing from source.
+          - os: ubuntu-latest
+            features: ""
+          # Neither has a package manager we can rely on, so SDL2 is built in.
+          - os: macos-latest
+            features: --features bundled-sdl
+          - os: windows-latest
+            features: --features bundled-sdl
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the libraries the crates bind to
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libsdl2-dev libasound2-dev libudev-dev
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ matrix.os }}-cargo-
+
+      - run: cargo build --locked --all-targets ${{ matrix.features }}
+      - run: cargo test --locked ${{ matrix.features }}
+
+      # Reported, not enforced: the tree has warnings that predate this
+      # workflow, and a red build for them would only teach people to ignore it.
+      - run: cargo clippy --locked --all-targets ${{ matrix.features }}
+        continue-on-error: true
+
+  # The terminal frontend alone, which is what anyone without SDL2 installs.
+  # It has its own feature path, so building the default one does not cover it.
+  tui-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the libraries the crates bind to
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libudev-dev
+      - run: cargo test --locked --no-default-features

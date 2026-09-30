@@ -1,0 +1,38 @@
+Installing a release archive
+============================
+
+These are finished binaries. packaging/install.sh and install.bat are not here
+because both build from source and need a checkout around them.
+
+Linux
+-----
+SDL2 is not linked in, so install your distribution's runtime: libsdl2-2.0-0 on
+Debian and Ubuntu, sdl2 on Arch, SDL2 on Fedora. Then:
+
+    install -m755 uwot-m8 uwot-tui ~/.local/bin/
+
+The M8's serial port is root-only until the rule is in place:
+
+    sudo cp 70-m8.rules /etc/udev/rules.d/
+    sudo udevadm control --reload-rules && sudo udevadm trigger
+
+Replug the M8 afterwards. For a launcher entry, with ~/.local/bin on your PATH:
+
+    install -Dm644 uwot-m8.svg ~/.local/share/icons/hicolor/scalable/apps/uwot-m8.svg
+    install -Dm644 uwot-m8.desktop ~/.local/share/applications/uwot-m8.desktop
+
+macOS
+-----
+SDL2 is linked in, so there is nothing to install beside the binaries:
+
+    install -m755 uwot-m8 uwot-tui ~/.local/bin/
+
+They are unsigned, so the first run needs Finder's right-click Open, or:
+
+    xattr -d com.apple.quarantine uwot-m8
+
+Windows
+-------
+Put uwot-m8.exe anywhere and run it; SDL2 is linked in. Only the windowed
+frontend is here, since uwot-tui needs a Unix terminal for raw mode and key
+releases.

@@ -1,0 +1,140 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # A tag that disagrees with Cargo.toml ships a binary that reports the wrong
+  # version, so it is worth one job to refuse before anything is built.
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag and Cargo.toml have to say the same version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          echo "tag $tag, Cargo.toml $crate"
+          test "$tag" = "$crate" || {
+            echo "::error::tag v$tag does not match Cargo.toml version $crate"
+            exit 1
+          }
+
+  build:
+    needs: check-version
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            features: ""
+          # Native arm64 runners, so nothing has to be cross-compiled.
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            features: ""
+          # macos-13 was the old Intel runner and has been retired; Intel builds
+          # are macos-*-intel now. macos-14 is deprecated, so arm64 is macos-15.
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            features: --features bundled-sdl
+          - os: macos-15
+            target: aarch64-apple-darwin
+            features: --features bundled-sdl
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            features: --features bundled-sdl
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the libraries the crates bind to
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libsdl2-dev libasound2-dev libudev-dev
+
+      - run: cargo build --locked --release ${{ matrix.features }}
+
+      # A release binary carries no symbols worth shipping.
+      - name: Strip
+        if: runner.os != 'Windows'
+        run: |
+          strip target/release/uwot-m8
+          strip target/release/uwot-tui
+
+      # The terminal frontend off Unix is a stub that tells you to use the other
+      # one, so Windows gets the windowed binary alone.
+      - name: Stage the archive
+        shell: bash
+        run: |
+          name="uwot-m8-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "stage/$name"
+          cp README.md packaging/INSTALL.txt "stage/$name/"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp target/release/uwot-m8.exe "stage/$name/"
+          else
+            cp target/release/uwot-m8 target/release/uwot-tui "stage/$name/"
+          fi
+          if [ "$RUNNER_OS" = Linux ]; then
+            # Without the rule the M8's serial port is root-only.
+            cp packaging/70-m8.rules packaging/uwot-m8.desktop \
+               packaging/uwot-m8.svg "stage/$name/"
+          fi
+          echo "ARCHIVE_NAME=$name" >> "$GITHUB_ENV"
+
+      - name: Archive (zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "stage/$env:ARCHIVE_NAME" `
+            -DestinationPath "$env:ARCHIVE_NAME.zip"
+
+      - name: Archive (tar.gz)
+        if: runner.os != 'Windows'
+        run: tar -czf "$ARCHIVE_NAME.tar.gz" -C stage "$ARCHIVE_NAME"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE_NAME }}
+          path: |
+            ${{ env.ARCHIVE_NAME }}.tar.gz
+            ${{ env.ARCHIVE_NAME }}.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: artifacts
+        run: sha256sum * > SHA256SUMS
+
+      # gh is on the runner already, so the release needs no third-party action.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag \
+            artifacts/*
