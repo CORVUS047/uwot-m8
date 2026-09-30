@@ -292,6 +292,7 @@ fn input_config(device: &Device) -> Result<SupportedStreamConfig, String> {
     ranges.sort_by_key(|range| {
         (
             range.channels() != CHANNELS as u16,
+            format_rank(range.sample_format()),
             u32::MAX - range.max_sample_rate(),
         )
     });
@@ -309,13 +310,35 @@ fn output_config(device: &Device, rate: u32) -> Result<SupportedStreamConfig, St
         .map_err(|e| format!("cannot read the output's audio formats: {e}"))?;
     let matching = ranges
         .filter(|range| range.min_sample_rate() <= rate && rate <= range.max_sample_rate())
-        .min_by_key(|range| (range.channels() as i32 - CHANNELS as i32).abs());
+        .min_by_key(|range| {
+            (
+                (range.channels() as i32 - CHANNELS as i32).abs(),
+                format_rank(range.sample_format()),
+            )
+        });
     if let Some(range) = matching {
         return Ok(range.with_sample_rate(rate));
     }
     device
         .default_output_config()
         .map_err(|e| format!("the output has no usable audio format: {e}"))
+}
+
+/// How much of the signal a format keeps.
+///
+/// A host lists one range per format per channel count, and the sound servers
+/// list `U8` first — so picking on channel count alone quietly plays the M8
+/// through eight bits, which is heard as a hiss under everything.
+fn format_rank(format: SampleFormat) -> u8 {
+    match format {
+        SampleFormat::F64 | SampleFormat::F32 => 0,
+        SampleFormat::I64 | SampleFormat::U64 => 1,
+        SampleFormat::I32 | SampleFormat::U32 => 2,
+        SampleFormat::I24 | SampleFormat::U24 => 3,
+        SampleFormat::I16 | SampleFormat::U16 => 4,
+        SampleFormat::I8 | SampleFormat::U8 => 5,
+        _ => 6,
+    }
 }
 
 /// The capture stream, converting the device's format into floats.
@@ -478,6 +501,20 @@ mod tests {
         let mut surround = [9.0; 4];
         narrow([0.25, 0.75], &mut surround);
         assert_eq!(surround, [0.25, 0.75, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn the_widest_format_on_offer_is_preferred() {
+        let mut formats = [
+            SampleFormat::U8,
+            SampleFormat::I16,
+            SampleFormat::I24,
+            SampleFormat::I32,
+            SampleFormat::F32,
+        ];
+        formats.sort_by_key(|format| format_rank(*format));
+        assert_eq!(formats[0], SampleFormat::F32);
+        assert_eq!(formats[4], SampleFormat::U8);
     }
 
     #[test]
