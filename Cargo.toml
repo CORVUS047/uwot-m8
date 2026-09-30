@@ -3,6 +3,7 @@ name = "uwot-m8"
 version = "0.1.0"
 edition = "2021"
 description = "Display and control a Dirtywave M8 over USB serial"
+license = "MIT"
 
 [lib]
 name = "uwot_m8"

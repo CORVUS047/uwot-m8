@@ -301,6 +301,10 @@ uwot-probe --cc "Midi Through" 2   # send a 2s ramp to a port, printing every va
 uwot-probe --pads 10      # name every controller button and direction for 10s
 ```
 
+## Licence
+
+MIT, see [LICENSE](LICENSE), which also carries the notice for the fonts.
+
 ## Credits
 
 Protocol details and bitmap fonts come from
