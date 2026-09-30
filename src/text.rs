@@ -133,7 +133,7 @@ struct Cursor {
 }
 
 /// A small rectangle: a piece of an outline the device has drawn.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 struct Fragment {
     x0: i32,
     y0: i32,
@@ -376,6 +376,7 @@ impl TextScreen {
         let fragments = std::mem::take(&mut self.pending_fragments);
 
         let mut leftovers: Vec<Fragment> = Vec::new();
+        let mut candidates: Vec<(Cursor, Rgb)> = Vec::new();
 
         for run in fragments.chunk_by(|a, b| a.color == b.color) {
             let bounds = (
@@ -407,13 +408,13 @@ impl TextScreen {
                                 .index_clamped(bounds.3.max(0) as usize)
                                 .min(self.rows - 1),
                     };
-                    self.move_cursor(
+                    candidates.push((
                         Cursor {
                             highlight: Span { cols, rows },
                             touched,
                         },
                         run[0].color,
-                    );
+                    ));
                 }
                 None => leftovers.extend_from_slice(run),
             }
@@ -451,6 +452,28 @@ impl TextScreen {
                 self.mark_cells(f.x0, f.y0, f.x1, f.y1, mark, f.color);
             }
         }
+
+        if let Some((cursor, color)) = self.pick_cursor(candidates) {
+            self.move_cursor(cursor, color);
+        }
+    }
+
+    /// Which of a frame's cursor-shaped outlines is the cursor.
+    ///
+    /// More than one box in a frame can pass for a cursor: the device draws
+    /// indicators the same shape, in the panels and on the meters. Whichever was
+    /// the cursor last frame still is, so a box elsewhere cannot take the
+    /// highlight off it and hand it back on the next frame, which read as the
+    /// cursor flickering wherever the screen was busy.
+    fn pick_cursor(&self, mut candidates: Vec<(Cursor, Rgb)>) -> Option<(Cursor, Rgb)> {
+        let standing = self.cursor.as_ref().map(|cursor| &cursor.highlight);
+        let at = candidates
+            .iter()
+            .position(|(cursor, _)| Some(&cursor.highlight) == standing);
+        match at {
+            Some(at) => Some(candidates.swap_remove(at)),
+            None => candidates.pop(),
+        }
     }
 
     /// What a cell holds besides text, as a short description.
@@ -477,10 +500,30 @@ impl TextScreen {
         std::ops::RangeInclusive<usize>,
         std::ops::RangeInclusive<usize>,
     )> {
-        if run.len() > MAX_CURSOR_FRAGMENTS {
+        // Drawn in the ground colour it is an erase, not a highlight: taking it
+        // for the cursor would paint a cell the colour it already is.
+        if run.first().is_some_and(|f| f.color == self.background) {
+            return None;
+        }
+        // The device redraws the cursor more than once in a frame, and identical
+        // redraws chunk into one run, so it is the distinct edges that are the
+        // outline's own.
+        let mut distinct = 0;
+        for (at, f) in run.iter().enumerate() {
+            if !run[..at].iter().any(|seen| seen == f) {
+                distinct += 1;
+            }
+        }
+        if distinct > MAX_CURSOR_FRAGMENTS {
             return None;
         }
         if x1 - x0 < FRAGMENT_SIZE as i32 || y1 - y0 < FRAGMENT_SIZE as i32 {
+            return None;
+        }
+        // An outline narrower or shorter than a cell is not enclosing one. The
+        // device draws boxes that size as indicators in the side panels, and
+        // they would otherwise pass for the cursor and take the highlight.
+        if x1 - x0 + 1 < self.grid_x.pitch as i32 || y1 - y0 + 1 < self.grid_y.pitch as i32 {
             return None;
         }
 
@@ -913,6 +956,36 @@ mod tests {
         }
     }
 
+    /// A second cursor-shaped box, a few cells along from the real one: the shape
+    /// the device draws for indicators and selections elsewhere on the screen.
+    fn rival_brackets(screen: &mut TextScreen, color: Rgb) {
+        for (x, y, w, h) in [
+            (199, 84, 3, 1),
+            (228, 84, 3, 1),
+            (199, 101, 3, 1),
+            (228, 101, 3, 1),
+            (199, 85, 1, 2),
+            (199, 99, 1, 2),
+            (230, 85, 1, 2),
+            (230, 99, 1, 2),
+        ] {
+            rect(screen, x, y, w, h, color);
+        }
+    }
+
+    /// A box over the centre of cell (7, 6) but smaller than the 12x14 cell it
+    /// sits in: the size the device draws indicators in its side panels.
+    fn subcell_box(screen: &mut TextScreen, color: Rgb) {
+        for (x, y, w, h) in [
+            (86, 88, 10, 1),
+            (86, 99, 10, 1),
+            (86, 89, 1, 10),
+            (95, 89, 1, 10),
+        ] {
+            rect(screen, x, y, w, h, color);
+        }
+    }
+
     #[test]
     fn the_device_grid_is_recovered_from_character_positions() {
         let mut screen = model_02();
@@ -979,6 +1052,69 @@ mod tests {
         assert_eq!(ch, '7');
         assert_eq!(bg, CURSOR);
         assert_ne!(fg, CURSOR);
+    }
+
+    /// A box in a side panel, drawn small and in the ground colour, used to pass
+    /// for the cursor: it took the highlight, the real cursor took it back on the
+    /// next frame, and the cell flickered for as long as the panel kept redrawing.
+    #[test]
+    fn an_indicator_elsewhere_cannot_take_the_highlight_off_the_cursor() {
+        let mut screen = model_02();
+        text(&mut screen, b'x', 0, 84);
+        cursor_brackets(&mut screen, CURSOR);
+        screen.flush();
+        assert_eq!(screen.cell(7, 6).highlight, Some(CURSOR));
+
+        screen.dirty = false;
+        for _ in 0..4 {
+            // The real cursor, and a rival box drawn after it.
+            cursor_brackets(&mut screen, CURSOR);
+            rival_brackets(&mut screen, WHITE);
+            screen.flush();
+            assert_eq!(
+                screen.cell(7, 6).highlight,
+                Some(CURSOR),
+                "the cursor lost its highlight to the rival box"
+            );
+        }
+        assert!(!screen.dirty, "the cursor was repainted every frame");
+    }
+
+    /// Too small to be enclosing a cell, so not the cursor.
+    #[test]
+    fn a_box_smaller_than_a_cell_is_not_a_cursor() {
+        let mut screen = model_02();
+        text(&mut screen, b'x', 0, 84);
+        subcell_box(&mut screen, WHITE);
+        screen.flush();
+        assert!(
+            screen.cells.iter().all(|cell| cell.highlight.is_none()),
+            "a sub-cell box was taken for the cursor"
+        );
+    }
+
+    /// Nothing enclosing, so nothing to highlight.
+    #[test]
+    fn an_outline_drawn_in_the_ground_colour_is_an_erase_not_a_cursor() {
+        let mut screen = model_02();
+        text(&mut screen, b'x', 0, 84);
+        let ground = screen.background();
+        cursor_brackets(&mut screen, ground);
+        screen.flush();
+        assert_eq!(screen.cell(7, 6).highlight, None);
+    }
+
+    /// The device draws the cursor more than once per frame; identical redraws
+    /// chunk into one run, which used to push it past the fragment limit and
+    /// lose it for that frame.
+    #[test]
+    fn a_cursor_drawn_twice_in_one_frame_is_still_the_cursor() {
+        let mut screen = model_02();
+        text(&mut screen, b'x', 0, 84);
+        cursor_brackets(&mut screen, CURSOR);
+        cursor_brackets(&mut screen, CURSOR);
+        screen.flush();
+        assert_eq!(screen.cell(7, 6).highlight, Some(CURSOR));
     }
 
     #[test]
