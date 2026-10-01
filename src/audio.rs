@@ -40,33 +40,56 @@ pub struct Audio {
     _output: Stream,
     failed: Arc<AtomicBool>,
     description: String,
+    /// The devices this was asked for, kept so the app can tell when the
+    /// settings have moved on and the passthrough has to be built again.
+    wanted_input: Option<String>,
+    wanted_output: Option<String>,
 }
 
 impl Audio {
-    /// Starts playing the M8's audio through the default output.
-    pub fn start() -> Result<Self, String> {
-        let mut hosts = cpal::available_hosts();
-        hosts.sort_by_key(|id| host_rank(id.name()));
+    /// Starts playing the M8's audio through this computer's output.
+    ///
+    /// `input` and `output` name the devices to use. `None` for either picks
+    /// one: the M8's own capture device by name, and the system's default
+    /// output.
+    pub fn start(input: Option<&str>, output: Option<&str>) -> Result<Self, String> {
+        let inputs = input_candidates(input);
+        if inputs.is_empty() {
+            return Err(match input {
+                Some(wanted) => format!("no audio input matching {wanted}"),
+                None => "no M8 audio device; is the M8 plugged in?".into(),
+            });
+        }
+        let outputs = output_candidates(output);
+        if outputs.is_empty() {
+            return Err(match output {
+                Some(wanted) => format!("no audio output matching {wanted}"),
+                None => "this computer has no audio output".into(),
+            });
+        }
 
+        // The two legs are separate streams and need not come from the same
+        // host: a name the sound server does not know is often an ALSA one, and
+        // taking the capture down to ALSA with it would find the M8 busy.
         let mut last_error = None;
-        for id in hosts {
-            let Ok(host) = cpal::host_from_id(id) else {
-                continue;
-            };
-            let Some(output) = host.default_output_device() else {
-                continue;
-            };
-            for input in m8_inputs(&host) {
-                match Self::connect(&input, &output, id) {
+        for (out_device, out_host) in &outputs {
+            for (in_device, in_host) in &inputs {
+                match Self::connect(in_device, out_device, (*in_host, *out_host), input, output) {
                     Ok(audio) => return Ok(audio),
                     Err(e) => last_error = Some(e),
                 }
             }
         }
-        Err(last_error.unwrap_or_else(|| "no M8 audio device; is the M8 plugged in?".into()))
+        Err(last_error.unwrap_or_else(|| "cannot play the M8's audio".into()))
     }
 
-    fn connect(input: &Device, output: &Device, host: HostId) -> Result<Self, String> {
+    fn connect(
+        input: &Device,
+        output: &Device,
+        hosts: (HostId, HostId),
+        wanted_input: Option<&str>,
+        wanted_output: Option<&str>,
+    ) -> Result<Self, String> {
         let in_config = input_config(input)?;
         let rate = in_config.sample_rate();
         let out_config = output_config(output, rate)?;
@@ -159,17 +182,28 @@ impl Audio {
             .play()
             .map_err(|e| format!("cannot start audio output: {e}"))?;
 
-        let description = format!(
-            "{} to {} at {rate} Hz via {}",
-            name_of(input),
-            name_of(output),
-            host.name(),
-        );
+        let description = match hosts {
+            (in_host, out_host) if in_host == out_host => format!(
+                "{} to {} at {rate} Hz via {}",
+                name_of(input),
+                name_of(output),
+                in_host.name(),
+            ),
+            (in_host, out_host) => format!(
+                "{} via {} to {} via {} at {rate} Hz",
+                name_of(input),
+                in_host.name(),
+                name_of(output),
+                out_host.name(),
+            ),
+        };
         Ok(Self {
             _input: input_stream,
             _output: output_stream,
             failed,
             description,
+            wanted_input: wanted_input.map(str::to_string),
+            wanted_output: wanted_output.map(str::to_string),
         })
     }
 
@@ -182,6 +216,118 @@ impl Audio {
     pub fn description(&self) -> &str {
         &self.description
     }
+
+    /// True while this is the passthrough the settings are asking for.
+    pub fn wants(&self, input: Option<&str>, output: Option<&str>) -> bool {
+        self.wanted_input.as_deref() == input && self.wanted_output.as_deref() == output
+    }
+}
+
+/// Every capture device the computer offers, the M8's own first.
+///
+/// Monitors are left out: those are this computer playing, not the M8.
+pub fn inputs() -> Vec<String> {
+    let mut names = device_names(|host| host.input_devices().ok().map(Iterator::collect));
+    names.retain(|name| !name.to_lowercase().contains(MONITOR_NEEDLE));
+    names.sort_by_key(|name| !name.to_lowercase().contains(DEVICE_NEEDLE));
+    names
+}
+
+/// Every device the computer can play through.
+pub fn outputs() -> Vec<String> {
+    device_names(|host| host.output_devices().ok().map(Iterator::collect))
+}
+
+/// The capture devices to try, in the order to try them.
+fn input_candidates(wanted: Option<&str>) -> Vec<(Device, HostId)> {
+    hosts()
+        .flat_map(|(host, id)| {
+            let devices = match wanted {
+                Some(wanted) => matching(host.input_devices().ok(), wanted),
+                None => m8_inputs(&host),
+            };
+            devices.into_iter().map(move |device| (device, id))
+        })
+        .collect()
+}
+
+/// The devices to try playing through, in the order to try them.
+fn output_candidates(wanted: Option<&str>) -> Vec<(Device, HostId)> {
+    hosts()
+        .flat_map(|(host, id)| {
+            let devices = match wanted {
+                Some(wanted) => matching(host.output_devices().ok(), wanted),
+                None => host.default_output_device().into_iter().collect(),
+            };
+            devices.into_iter().map(move |device| (device, id))
+        })
+        .collect()
+}
+
+/// Every host the build has, best first.
+fn hosts() -> impl Iterator<Item = (Host, HostId)> {
+    let mut ids = cpal::available_hosts();
+    ids.sort_by_key(|id| host_rank(id.name()));
+    ids.into_iter()
+        .filter_map(|id| Some((cpal::host_from_id(id).ok()?, id)))
+}
+
+/// The devices every host offers, best host first and each name once.
+///
+/// One card is several names across the three hosts, and a name is all the
+/// settings menu can store, so the list is what the menu shows and `start`
+/// looks a name up in again.
+fn device_names(list: impl Fn(&Host) -> Option<Vec<Device>>) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for (host, _) in hosts() {
+        for device in list(&host).unwrap_or_default() {
+            let Ok(about) = device.description() else {
+                continue;
+            };
+            let name = about.name().to_string();
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// The devices on one host that answer to a name: the exact one first, then
+/// any whose name contains it, so a hand-written config need not spell a long
+/// ALSA name out in full.
+///
+/// A loose match never lands on a monitor, or "M8" picks "Monitor of M8" — this
+/// computer playing — ahead of the M8 itself. Naming one outright still works.
+fn matching(devices: Option<impl Iterator<Item = Device>>, wanted: &str) -> Vec<Device> {
+    let Some(devices) = devices else {
+        return Vec::new();
+    };
+    let named: Vec<(Device, String)> = devices
+        .filter_map(|device| {
+            let name = device.description().ok()?.name().to_string();
+            Some((device, name))
+        })
+        .collect();
+    let (exact, loose): (Vec<_>, Vec<_>) = named.into_iter().partition(|(_, name)| name == wanted);
+    exact
+        .into_iter()
+        .chain(
+            loose
+                .into_iter()
+                .filter(|(_, name)| loosely_matches(name, wanted)),
+        )
+        .map(|(device, _)| device)
+        .collect()
+}
+
+/// Whether a device name answers to part of a name, monitors left out.
+fn loosely_matches(name: &str, wanted: &str) -> bool {
+    let (name, wanted) = (name.to_lowercase(), wanted.to_lowercase());
+    if name.contains(MONITOR_NEEDLE) && !wanted.contains(MONITOR_NEEDLE) {
+        return false;
+    }
+    name.contains(&wanted)
 }
 
 /// The M8's capture devices on one host, monitors left out.
@@ -484,6 +630,16 @@ fn period(config: &SupportedStreamConfig) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn part_of_a_name_matches_the_device_but_never_its_monitor() {
+        assert!(loosely_matches("M8 Analog Stereo", "m8 analog"));
+        assert!(!loosely_matches("Monitor of M8 Analog Stereo", "M8 Analog"));
+        assert!(loosely_matches(
+            "Monitor of M8 Analog Stereo",
+            "monitor of m8"
+        ));
+    }
 
     #[test]
     fn a_mono_frame_is_heard_on_both_sides() {

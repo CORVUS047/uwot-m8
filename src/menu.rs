@@ -437,10 +437,26 @@ mod tests {
     fn enter_on_a_value_row_moves_it_on_like_right_does() {
         let (mut menu, mut config, env) = open();
         select(&mut menu, &mut config, &env, Setting::Audio);
+        menu.handle(Action::Activate, &mut config, &env);
+        select(&mut menu, &mut config, &env, Setting::AudioOn);
         let outcome = menu.handle(Action::Activate, &mut config, &env);
         assert!(config.audio);
         assert!(outcome.changed.audio);
         assert!(outcome.write);
+    }
+
+    #[test]
+    fn the_audio_page_lists_the_switch_and_both_devices() {
+        let (mut menu, mut config, env) = open();
+        select(&mut menu, &mut config, &env, Setting::Audio);
+        menu.handle(Action::Activate, &mut config, &env);
+        assert_eq!(menu.title(), "Audio");
+        let items = menu.items(&config);
+        let labels: Vec<&str> = items.iter().map(|(label, _)| label.as_str()).collect();
+        assert_eq!(labels, ["Play", "From", "To", "Back"]);
+        assert_eq!(items[0].1, "off");
+        assert_eq!(items[1].1, "the M8");
+        assert_eq!(items[2].1, "default");
     }
 
     #[test]

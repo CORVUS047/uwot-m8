@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::audio;
 use crate::config::{Bound, Config, MenuEnv, Setting};
 use crate::keys::{self, bits, Keyjazz};
 use crate::m8::{self, M8};
@@ -381,6 +382,8 @@ impl App {
                 self.outputs.release_all(&released, &self.config);
                 self.env = MenuEnv {
                     midi_ports: midi::ports(),
+                    audio_inputs: audio::inputs(),
+                    audio_outputs: audio::outputs(),
                 };
                 self.menu = Some(Menu::new(Setting::terminal()));
                 self.repaint = true;

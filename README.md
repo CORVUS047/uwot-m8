@@ -117,9 +117,19 @@ the terminal must be at least that big. Colour depth comes from
 ## Audio
 
 The M8 is a USB audio interface as well as a serial device, so its headphone mix
-arrives as an ordinary capture device. **Audio** in the settings plays it through
-your default output. Off by default: many setups already route the M8 to an
-interface or mixer, and hearing it twice is worse than not hearing it at all imo.
+arrives as an ordinary capture device. The **Audio** settings page plays it
+through this computer:
+
+| Row | Meaning |
+|---|---|
+| `Play` | on or off. Off by default: many setups already route the M8 to an interface or mixer, and hearing it twice is worse than not hearing it at all imo |
+| `From` | the capture device to take it from. `the M8` finds the M8 by name, which is what you want unless you have two of them |
+| `To` | where to play it. `default` follows whatever this computer's default output is |
+
+`From` and `To` list every device the system offers, the M8's own capture devices
+first. Both are stored by name, so the passthrough comes back on the same device
+after a replug; a name no longer there is kept as a choice and reported in the
+status line until it returns.
 
 ## MIDI control changes
 
@@ -182,7 +192,7 @@ Settings
   Controls   shown        the face buttons below the screen
   Theme      M8           uwot-tui only
   Colours    auto         uwot-tui only
-  Audio      off          play the M8's own output through this computer
+  Audio      off          a page: play the M8's output here, and through what
   Buttons    >            a page: which key presses which M8 button
   MIDI       no port      a page: the MIDI port, and the eight CC bindings
 ```
@@ -195,6 +205,8 @@ show_controls = true    # draw the face buttons below the screen
 theme = m8              # m8 (the device's own colours) or terminal
 colors = auto           # auto, truecolor or 256
 audio = false           # play the M8's own output through this computer
+audio_input = none      # the device to take it from; none finds the M8 by name
+audio_output = none     # where to play it; none is this computer's default
 
 key_up = Up,PadUp       # which keys press which M8 buttons
 key_select = z,LeftShift,PadWest
@@ -296,6 +308,8 @@ uwot-probe --trace 70     # print rectangles in arrival order, which is how a
 uwot-probe --boxes 2      # report what the cursor heuristics made of each outline
 uwot-probe --ink 2        # report the sub-cell ink in each cell and its character
 uwot-probe --audio 4      # play the M8's audio for 4s, saying where from and to
+uwot-probe --audio-devices         # list the capture and playback devices by name
+uwot-probe --audio-in "M8 Analog" --audio-out Scarlett 4   # play between two of them
 uwot-probe --midi         # list MIDI output ports and which one is the default
 uwot-probe --cc "Midi Through" 2   # send a 2s ramp to a port, printing every value
 uwot-probe --pads 10      # name every controller button and direction for 10s

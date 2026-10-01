@@ -279,6 +279,10 @@ impl Changed {
 #[derive(Clone, Debug, Default)]
 pub struct MenuEnv {
     pub midi_ports: Vec<String>,
+    /// The capture devices the audio can be played from.
+    pub audio_inputs: Vec<String>,
+    /// The devices it can be played through.
+    pub audio_outputs: Vec<String>,
 }
 
 /// How the control-change slots are named, in the menu and in the file.
@@ -293,7 +297,14 @@ pub enum Setting {
     Controls,
     Theme,
     ColorDepth,
+    /// Opens the audio page.
     Audio,
+    /// Play the M8's audio through this computer, or do not.
+    AudioOn,
+    /// The device the M8's audio is taken from.
+    AudioInput,
+    /// The device it is played through.
+    AudioOutput,
     /// Opens the page of button bindings.
     Buttons,
     /// The key that presses a button.
@@ -352,6 +363,12 @@ impl Setting {
                 rows.push(Setting::Back);
                 Some(rows)
             }
+            Setting::Audio => Some(vec![
+                Setting::AudioOn,
+                Setting::AudioInput,
+                Setting::AudioOutput,
+                Setting::Back,
+            ]),
             Setting::Midi => {
                 let mut rows = vec![Setting::MidiPort];
                 rows.extend((0..cc::SLOTS).map(Setting::CcSlot));
@@ -381,6 +398,9 @@ impl Setting {
             Setting::Theme => "Theme",
             Setting::ColorDepth => "Colours",
             Setting::Audio => "Audio",
+            Setting::AudioOn => "Play",
+            Setting::AudioInput => "From",
+            Setting::AudioOutput => "To",
             Setting::Buttons => "Buttons",
             Setting::Key(button) => button.label(),
             Setting::ResetKeys => "Reset keys",
@@ -405,6 +425,7 @@ impl Setting {
     pub fn page_title(self) -> &'static str {
         match self {
             Setting::Midi => "MIDI",
+            Setting::Audio => "Audio",
             other => other.label(),
         }
     }
@@ -427,6 +448,11 @@ pub struct Config {
     pub color_depth: ColorDepth,
     /// Play the M8's own audio through this computer's output.
     pub audio: bool,
+    /// The capture device that audio is taken from, by name. `None` finds the
+    /// M8 by name instead.
+    pub audio_input: Option<String>,
+    /// The device it is played through, by name. `None` uses the default.
+    pub audio_output: Option<String>,
     /// The MIDI output the control-change bindings send to, by name.
     pub midi_port: Option<String>,
     pub bindings: Bindings,
@@ -441,6 +467,8 @@ impl Default for Config {
             theme: Theme::default(),
             color_depth: ColorDepth::default(),
             audio: false,
+            audio_input: None,
+            audio_output: None,
             midi_port: None,
             bindings: Bindings::default(),
             cc: vec![Binding::default(); cc::SLOTS],
@@ -464,6 +492,17 @@ impl fmt::Display for Config {
         writeln!(f, "colors = {}", self.color_depth.label())?;
         writeln!(f, "# audio: play the M8's own output through this computer")?;
         writeln!(f, "audio = {}", self.audio)?;
+        writeln!(
+            f,
+            "# audio_input: the device that audio is taken from, or none to find"
+        )?;
+        writeln!(
+            f,
+            "# the M8 by name; audio_output: where to play it, or none"
+        )?;
+        writeln!(f, "# for this computer's default. Part of a name will do.")?;
+        writeln!(f, "audio_input = {}", name_or_none(&self.audio_input))?;
+        writeln!(f, "audio_output = {}", name_or_none(&self.audio_output))?;
         writeln!(f)?;
         writeln!(
             f,
@@ -662,6 +701,8 @@ impl Config {
                         config.color_depth = depth;
                     }
                 }
+                "audio_input" => config.audio_input = parse_device(value),
+                "audio_output" => config.audio_output = parse_device(value),
                 "midi_port" => {
                     config.midi_port = match value {
                         "" | "none" => None,
@@ -739,7 +780,15 @@ impl Config {
             }
             Setting::Theme => self.theme.label().into(),
             Setting::ColorDepth => self.color_depth.label().into(),
-            Setting::Audio => if self.audio { "on" } else { "off" }.into(),
+            Setting::Audio | Setting::AudioOn => if self.audio { "on" } else { "off" }.into(),
+            Setting::AudioInput => match &self.audio_input {
+                Some(name) => name.clone(),
+                None => "the M8".into(),
+            },
+            Setting::AudioOutput => match &self.audio_output {
+                Some(name) => name.clone(),
+                None => "default".into(),
+            },
             Setting::Buttons => ">".into(),
             Setting::Key(button) => self.bindings.keys(button),
             Setting::ResetKeys => "press to apply".into(),
@@ -798,8 +847,18 @@ impl Config {
                 self.color_depth = self.color_depth.next();
                 Changed::display()
             }
-            Setting::Audio => {
+            Setting::AudioOn => {
                 self.audio = !self.audio;
+                Changed::audio()
+            }
+            Setting::AudioInput => {
+                self.audio_input =
+                    next_port(self.audio_input.as_deref(), &env.audio_inputs, forwards);
+                Changed::audio()
+            }
+            Setting::AudioOutput => {
+                self.audio_output =
+                    next_port(self.audio_output.as_deref(), &env.audio_outputs, forwards);
                 Changed::audio()
             }
             Setting::MidiPort => {
@@ -809,6 +868,7 @@ impl Config {
             Setting::Key(_)
             | Setting::CcKey(_)
             | Setting::Buttons
+            | Setting::Audio
             | Setting::Midi
             | Setting::CcSlot(_)
             | Setting::ResetKeys
@@ -912,7 +972,20 @@ fn step(value: u8, delta: i32, low: u8, high: u8) -> u8 {
     (value as i32 + delta).clamp(low as i32, high as i32) as u8
 }
 
-/// The next MIDI port along, with "none" among the choices.
+/// A device name for the config file, or `none` where nothing is set.
+fn name_or_none(name: &Option<String>) -> &str {
+    name.as_deref().unwrap_or("none")
+}
+
+/// A device name read back out of the config file.
+fn parse_device(value: &str) -> Option<String> {
+    match value {
+        "" | "none" => None,
+        name => Some(name.to_string()),
+    }
+}
+
+/// The next port or audio device along, with "none" among the choices.
 fn next_port(current: Option<&str>, ports: &[String], forwards: bool) -> Option<String> {
     let mut choices: Vec<Option<&str>> = vec![None];
     choices.extend(ports.iter().map(|port| Some(port.as_str())));
@@ -1040,6 +1113,7 @@ mod tests {
     fn the_port_row_cycles_through_what_is_plugged_in_plus_none() {
         let env = MenuEnv {
             midi_ports: vec!["M8 MIDI 1".into(), "Midi Through".into()],
+            ..MenuEnv::default()
         };
         let mut config = Config::default();
         assert_eq!(config.adjust(Setting::MidiPort, 1, &env), Changed::midi());
@@ -1063,6 +1137,7 @@ mod tests {
 
         let env = MenuEnv {
             midi_ports: vec!["Somewhere else".into()],
+            ..MenuEnv::default()
         };
         config.adjust(Setting::MidiPort, 1, &env);
         assert_eq!(config.midi_port.as_deref(), Some("Somewhere else"));
@@ -1071,9 +1146,50 @@ mod tests {
     #[test]
     fn turning_audio_on_tells_the_app_to_start_it() {
         let mut config = Config::default();
-        let changed = config.adjust(Setting::Audio, 1, &MenuEnv::default());
+        let changed = config.adjust(Setting::AudioOn, 1, &MenuEnv::default());
         assert!(config.audio);
         assert_eq!(changed, Changed::audio());
+    }
+
+    #[test]
+    fn the_audio_device_rows_cycle_through_what_is_plugged_in_plus_automatic() {
+        let env = MenuEnv {
+            audio_inputs: vec!["M8 Analog Stereo".into(), "Scarlett Solo".into()],
+            audio_outputs: vec!["Headphones".into()],
+            ..MenuEnv::default()
+        };
+        let mut config = Config::default();
+        assert_eq!(config.value(Setting::AudioInput), "the M8");
+
+        assert_eq!(
+            config.adjust(Setting::AudioInput, 1, &env),
+            Changed::audio()
+        );
+        assert_eq!(config.audio_input.as_deref(), Some("M8 Analog Stereo"));
+        config.adjust(Setting::AudioInput, -1, &env);
+        assert_eq!(config.audio_input, None);
+
+        config.adjust(Setting::AudioOutput, 1, &env);
+        assert_eq!(config.audio_output.as_deref(), Some("Headphones"));
+        config.adjust(Setting::AudioOutput, 1, &env);
+        assert_eq!(config.audio_output, None);
+    }
+
+    #[test]
+    fn the_audio_devices_survive_a_trip_through_the_config_file() {
+        let config = Config {
+            audio: true,
+            audio_input: Some("M8 Analog Stereo".into()),
+            audio_output: Some("Headphones".into()),
+            ..Config::default()
+        };
+        let read_back = Config::parse(&config.to_string());
+        assert_eq!(read_back.audio_input.as_deref(), Some("M8 Analog Stereo"));
+        assert_eq!(read_back.audio_output.as_deref(), Some("Headphones"));
+
+        let automatic = Config::parse(&Config::default().to_string());
+        assert_eq!(automatic.audio_input, None);
+        assert_eq!(automatic.audio_output, None);
     }
 
     #[test]
@@ -1088,7 +1204,12 @@ mod tests {
 
     #[test]
     fn every_page_offers_a_way_back_out() {
-        for page in [Setting::Buttons, Setting::Midi, Setting::CcSlot(0)] {
+        for page in [
+            Setting::Buttons,
+            Setting::Audio,
+            Setting::Midi,
+            Setting::CcSlot(0),
+        ] {
             let rows = page.page().expect("a page");
             assert_eq!(rows.last(), Some(&Setting::Back));
         }

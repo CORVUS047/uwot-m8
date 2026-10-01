@@ -18,7 +18,7 @@ use uwot_m8::menu::{self, Menu};
 use uwot_m8::outputs::Outputs;
 use uwot_m8::proto::{self, Command};
 use uwot_m8::screen::Screen;
-use uwot_m8::{font, midi, pad, ui};
+use uwot_m8::{audio, font, midi, pad, ui};
 
 const DEFAULT_SCALE: u32 = 3;
 /// How far a number in the settings moves with Shift held.
@@ -398,6 +398,8 @@ fn run(options: Options) -> Result<(), String> {
                     outputs.release_all(&released, &config);
                     env = MenuEnv {
                         midi_ports: midi::ports(),
+                        audio_inputs: audio::inputs(),
+                        audio_outputs: audio::outputs(),
                     };
                     menu = Some(Menu::new(Setting::window()));
                     overlay_stale = true;

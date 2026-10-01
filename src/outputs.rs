@@ -35,6 +35,18 @@ impl Outputs {
         if !config.audio {
             self.audio = None;
         }
+        let wanted_input = config.audio_input.as_deref();
+        let wanted_output = config.audio_output.as_deref();
+        if self
+            .audio
+            .as_ref()
+            .is_some_and(|audio| !audio.wants(wanted_input, wanted_output))
+        {
+            // The devices the settings ask for have changed, so the running
+            // passthrough has to go before the new one can have them.
+            self.audio = None;
+            self.last_retry = None;
+        }
         if self.port.as_ref().is_some_and(|port| !port.is_open()) {
             self.port = None;
             self.engine.clear();
@@ -56,7 +68,7 @@ impl Outputs {
         self.last_retry = Some(Instant::now());
 
         if wants_audio {
-            match Audio::start() {
+            match Audio::start(wanted_input, wanted_output) {
                 Ok(audio) => {
                     self.message = None;
                     self.audio = Some(audio);
@@ -128,7 +140,10 @@ impl Outputs {
         if config.audio {
             match &self.audio {
                 Some(audio) => parts.push(format!("audio: {}", audio.description())),
-                None => parts.push("audio: waiting for the M8".into()),
+                None => parts.push(format!(
+                    "audio: waiting for {}",
+                    config.audio_input.as_deref().unwrap_or("the M8")
+                )),
             }
         }
         if let Some(wanted) = &config.midi_port {
