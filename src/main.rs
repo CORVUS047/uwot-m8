@@ -18,7 +18,7 @@ use uwot_m8::menu::{self, Menu};
 use uwot_m8::outputs::Outputs;
 use uwot_m8::proto::{self, Command};
 use uwot_m8::screen::Screen;
-use uwot_m8::{audio, font, midi, pad, ui};
+use uwot_m8::{font, pad, ui};
 
 const DEFAULT_SCALE: u32 = 3;
 /// How far a number in the settings moves with Shift held.
@@ -187,9 +187,12 @@ fn upload_canvas(texture: &mut Texture, canvas: &ui::Canvas) -> Result<(), Strin
 }
 
 /// Acts on what the menu made of a key or a controller button.
-fn apply_menu(outcome: menu::Outcome, config: &Config, menu: &mut Option<Menu>) {
+fn apply_menu(outcome: menu::Outcome, config: &Config, menu: &mut Option<Menu>, env: &mut MenuEnv) {
     if let Some(message) = &outcome.message {
         eprintln!("uwot-m8: {message}");
+    }
+    if outcome.rescan {
+        env.rescan_audio();
     }
     if outcome.write {
         save_settings(config);
@@ -354,7 +357,7 @@ fn run(options: Options) -> Result<(), String> {
                         };
 
                         let outcome = open.handle(action, &mut config, &env);
-                        apply_menu(outcome, &config, &mut menu);
+                        apply_menu(outcome, &config, &mut menu, &mut env);
                     }
                     _ => {}
                 }
@@ -396,12 +399,7 @@ fn run(options: Options) -> Result<(), String> {
                 Action::OpenSettings => {
                     let released = keys.release_all();
                     outputs.release_all(&released, &config);
-                    env = MenuEnv {
-                        midi_ports: midi::ports(),
-                        audio_inputs: audio::inputs(),
-                        audio_outputs: audio::outputs(),
-                        audio_sources: audio::sources(),
-                    };
+                    env = MenuEnv::scan();
                     menu = Some(Menu::new(Setting::window()));
                     overlay_stale = true;
                 }
@@ -443,7 +441,7 @@ fn run(options: Options) -> Result<(), String> {
                     continue;
                 };
                 let outcome = open.handle(action, &mut config, &env);
-                apply_menu(outcome, &config, &mut menu);
+                apply_menu(outcome, &config, &mut menu, &mut env);
                 overlay_stale = true;
                 continue;
             }

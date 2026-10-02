@@ -15,7 +15,9 @@ fn play_audio(
     let running: Vec<audio::Audio> = legs
         .iter()
         .map(|(leg, input, output)| {
-            let audio = audio::Audio::start(*leg, *input, *output)?;
+            // Exclusive when both legs run: the same rule the app follows.
+            let exclusive = *leg == audio::Leg::Send && legs.len() > 1;
+            let audio = audio::Audio::start(*leg, *input, *output, exclusive)?;
             println!(
                 "{} {}",
                 match leg {
@@ -45,6 +47,7 @@ fn list_audio() -> Result<(), String> {
         ("in  ", audio::inputs()),
         ("out ", audio::outputs()),
         ("send", audio::sources()),
+        ("app ", audio::apps()),
     ] {
         if names.is_empty() {
             println!("{what}  (none)");

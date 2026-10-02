@@ -2,12 +2,10 @@
 
 use std::time::{Duration, Instant};
 
-use crate::audio;
 use crate::config::{Bound, Config, MenuEnv, Setting};
 use crate::keys::{self, bits, Keyjazz};
 use crate::m8::{self, M8};
 use crate::menu::{self, Menu};
-use crate::midi;
 use crate::outputs::Outputs;
 use crate::pad::{PadEvent, Pads};
 use crate::proto;
@@ -349,6 +347,9 @@ impl App {
         if let Some(message) = outcome.message {
             self.message = message;
         }
+        if outcome.rescan {
+            self.env.rescan_audio();
+        }
         if outcome.changed.display {
             self.reconfigure = true;
         }
@@ -380,12 +381,7 @@ impl App {
                 let mut released = self.cc_keys.clear();
                 released.extend(self.pad_cc.drain(..).map(|(_, slot)| slot));
                 self.outputs.release_all(&released, &self.config);
-                self.env = MenuEnv {
-                    midi_ports: midi::ports(),
-                    audio_inputs: audio::inputs(),
-                    audio_outputs: audio::outputs(),
-                    audio_sources: audio::sources(),
-                };
+                self.env = MenuEnv::scan();
                 self.menu = Some(Menu::new(Setting::terminal()));
                 self.repaint = true;
             }

@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::audio;
 use crate::cc::{self, Binding, Curve, Shape, Trigger};
 use crate::keys::bits;
 
@@ -285,6 +286,29 @@ pub struct MenuEnv {
     pub audio_outputs: Vec<String>,
     /// The devices audio can be sent into the M8 from.
     pub audio_sources: Vec<String>,
+    /// The applications one of which can be sent into the M8 on its own.
+    pub audio_apps: Vec<String>,
+}
+
+impl MenuEnv {
+    /// Everything the menu can offer, looked up now.
+    pub fn scan() -> Self {
+        let mut env = Self {
+            midi_ports: crate::midi::ports(),
+            ..Self::default()
+        };
+        env.rescan_audio();
+        env
+    }
+
+    /// The audio lists again, for when the audio page is opened: devices are
+    /// plugged in and applications started while the menu sits there.
+    pub fn rescan_audio(&mut self) {
+        self.audio_inputs = audio::inputs();
+        self.audio_outputs = audio::outputs();
+        self.audio_sources = audio::sources();
+        self.audio_apps = audio::apps();
+    }
 }
 
 /// How the control-change slots are named, in the menu and in the file.
@@ -851,7 +875,10 @@ impl Config {
             },
             Setting::AudioSendOn => if self.audio_send { "on" } else { "off" }.into(),
             Setting::AudioSendInput => match &self.audio_send_input {
-                Some(name) => name.clone(),
+                Some(name) => match name.strip_prefix(audio::APP_PREFIX) {
+                    Some(app) => format!("{app} (app)"),
+                    None => name.clone(),
+                },
                 None => "default".into(),
             },
             Setting::AudioSendOutput => match &self.audio_send_output {
@@ -935,11 +962,16 @@ impl Config {
                 Changed::audio()
             }
             Setting::AudioSendInput => {
-                self.audio_send_input = next_port(
-                    self.audio_send_input.as_deref(),
-                    &env.audio_sources,
-                    forwards,
-                );
+                // One row for either, applications first: a particular one is
+                // more often what someone is after than a whole device.
+                let mut choices: Vec<String> = env
+                    .audio_apps
+                    .iter()
+                    .map(|app| format!("{}{app}", audio::APP_PREFIX))
+                    .collect();
+                choices.extend(env.audio_sources.iter().cloned());
+                self.audio_send_input =
+                    next_port(self.audio_send_input.as_deref(), &choices, forwards);
                 Changed::audio()
             }
             Setting::AudioSendOutput => {
@@ -1280,6 +1312,44 @@ mod tests {
 
         let automatic = Config::parse(&Config::default().to_string());
         assert_eq!(automatic, Config::default());
+    }
+
+    #[test]
+    fn the_send_row_offers_applications_before_devices_and_says_which_is_which() {
+        let env = MenuEnv {
+            audio_apps: vec!["Zen".into()],
+            audio_sources: vec!["Monitor of Headphones".into()],
+            ..MenuEnv::default()
+        };
+        let mut config = Config::default();
+
+        config.adjust(Setting::AudioSendInput, 1, &env);
+        assert_eq!(config.audio_send_input.as_deref(), Some("app:Zen"));
+        assert_eq!(config.value(Setting::AudioSendInput), "Zen (app)");
+
+        config.adjust(Setting::AudioSendInput, 1, &env);
+        assert_eq!(
+            config.audio_send_input.as_deref(),
+            Some("Monitor of Headphones")
+        );
+        assert_eq!(
+            config.value(Setting::AudioSendInput),
+            "Monitor of Headphones"
+        );
+
+        config.adjust(Setting::AudioSendInput, 1, &env);
+        assert_eq!(config.audio_send_input, None);
+        assert_eq!(config.value(Setting::AudioSendInput), "default");
+    }
+
+    #[test]
+    fn an_application_survives_a_trip_through_the_config_file() {
+        let config = Config {
+            audio_send: true,
+            audio_send_input: Some("app:Zen".into()),
+            ..Config::default()
+        };
+        assert_eq!(Config::parse(&config.to_string()), config);
     }
 
     #[test]

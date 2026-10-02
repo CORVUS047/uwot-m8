@@ -127,14 +127,36 @@ independent — sending something into the M8 does not cost you hearing it.
 | `Play from` | which capture device to take it from. `the M8` finds the M8 by name, which is what you want unless you have two of them |
 | `Play to` | where to play it. `default` follows this computer's default output |
 | `Send` | this computer heard on the M8: on or off |
-| `Send from` | what to send. `default` is this computer's default input |
+| `Send from` | what to send. `default` is this computer's default input; the row also lists the applications currently playing, marked `(app)` |
 | `Send into` | which device to send it to. `the M8` finds the M8 by name |
 
-`Send from` is how either direction gets in: a microphone or an interface input
-is a capture device, and so is the **monitor** of an output — `Monitor of ...`
-carries whatever this computer is playing, so picking one sends another
-application into the M8. What the M8 then does with it is up to the M8's own
-input settings.
+`Send from` is how anything here gets in. It offers three kinds of thing:
+
+- **A capture device** — a microphone, or an interface input.
+- **An application**, listed as `Zen (app)` and stored as `app:Zen`. The sound
+  server picks that one program's audio out of the mix, so you can sample a game
+  off its own output without the rest of the desktop coming with it.
+- **The monitor of an output** — `Monitor of ...` carries everything this
+  computer is playing through that device, mixed together, for when you do want
+  the lot.
+
+What the M8 then does with what arrives is up to the M8's own input settings.
+
+With `Send` on but `Play` off, an application is listened in on where it already
+plays, so you keep hearing it here as well. Turn `Play` on and the program is
+moved onto an output of its own that goes nowhere, leaving the M8 the only way it
+is heard — otherwise you would hear it twice, once straight from the program and
+once coming back through the M8. The status line says `alone` while that is so.
+
+It is put back the moment either switch goes off, or the program closes, or this
+app does. Should a run be killed outright, the next one clears up the sink it left
+behind; `pactl unload-module module-null-sink` does it by hand.
+
+Picking an application needs PulseAudio or PipeWire, so the list is Linux-only;
+elsewhere the row offers devices alone, and a `Monitor of ...` or a loopback
+device is the way round. The name is what is stored, so closing the program and
+opening it again picks it back up on its own — the status line says what it is
+waiting for meanwhile.
 
 Every device row lists what the system offers and stores the name, so a
 passthrough comes back on the same device after a replug. A name that is no
@@ -220,7 +242,8 @@ audio = false           # play the M8's own output through this computer
 audio_input = none      # the device to take it from; none finds the M8 by name
 audio_output = none     # where to play it; none is this computer's default
 audio_send = false      # play a device here into the M8's USB audio input
-audio_send_input = none # what to send; none is this computer's default input
+audio_send_input = none # what to send: a device, app:NAME, or none for the
+                        # default input
 audio_send_output = none    # which M8 device; none finds the M8 by name
 
 key_up = Up,PadUp       # which keys press which M8 buttons
@@ -323,10 +346,12 @@ uwot-probe --trace 70     # print rectangles in arrival order, which is how a
 uwot-probe --boxes 2      # report what the cursor heuristics made of each outline
 uwot-probe --ink 2        # report the sub-cell ink in each cell and its character
 uwot-probe --audio 4      # play the M8's audio for 4s, saying where from and to
-uwot-probe --audio-devices         # list the devices each row can be set to
+uwot-probe --audio-devices         # list the devices and applications rows can be set to
 uwot-probe --audio-in "M8 Analog" --audio-out Scarlett 4   # play between two of them
 uwot-probe --audio-send 4           # send this computer's default input to the M8
 uwot-probe --audio --send-from "Monitor of Scarlett" 4      # both ways at once
+uwot-probe --send-from app:Zen 4    # send one application, the rest left out
+uwot-probe --audio --send-from app:Zen 4    # ...and take it off this computer
 uwot-probe --midi         # list MIDI output ports and which one is the default
 uwot-probe --cc "Midi Through" 2   # send a 2s ramp to a port, printing every value
 uwot-probe --pads 10      # name every controller button and direction for 10s

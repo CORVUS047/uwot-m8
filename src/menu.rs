@@ -26,6 +26,9 @@ pub struct Outcome {
     pub write: bool,
     /// The menu has closed.
     pub closed: bool,
+    /// The audio devices and applications want looking up again, because the
+    /// page that lists them has just been opened.
+    pub rescan: bool,
     /// Something worth telling the user, e.g. a key that cannot be bound.
     pub message: Option<String>,
 }
@@ -185,7 +188,10 @@ impl Menu {
                 rows,
                 selected: 0,
             });
-            return Outcome::default();
+            return Outcome {
+                rescan: setting == Setting::Audio,
+                ..Outcome::default()
+            };
         }
         if setting == Setting::Back {
             return self.leave();
@@ -443,6 +449,17 @@ mod tests {
         assert!(config.audio);
         assert!(outcome.changed.audio);
         assert!(outcome.write);
+    }
+
+    #[test]
+    fn opening_the_audio_page_asks_for_the_devices_to_be_looked_up_again() {
+        let (mut menu, mut config, env) = open();
+        select(&mut menu, &mut config, &env, Setting::Audio);
+        assert!(menu.handle(Action::Activate, &mut config, &env).rescan);
+
+        let (mut menu, mut config, env) = open();
+        select(&mut menu, &mut config, &env, Setting::Buttons);
+        assert!(!menu.handle(Action::Activate, &mut config, &env).rescan);
     }
 
     #[test]

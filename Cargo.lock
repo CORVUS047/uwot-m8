@@ -1242,12 +1242,13 @@ dependencies = [
 
 [[package]]
 name = "uwot-m8"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "cpal",
  "gilrs",
  "libc",
  "midir",
+ "pulseaudio",
  "ringbuf",
  "sdl2",
  "serialport",

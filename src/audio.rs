@@ -57,10 +57,66 @@ impl Leg {
     }
 }
 
+/// Where a passthrough's audio comes from.
+enum Source {
+    /// A capture device, read by cpal.
+    Device(Stream),
+    /// One application, picked out of the mix by the sound server.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd"
+    ))]
+    App(crate::apps::Capture),
+}
+
+impl Source {
+    fn play(&self) -> Result<(), String> {
+        match self {
+            Source::Device(stream) => stream
+                .play()
+                .map_err(|e| format!("cannot start the capture: {e}")),
+            // An application capture is reading from the moment it is opened.
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd"
+            ))]
+            Source::App(_) => Ok(()),
+        }
+    }
+
+    /// True once the source has stopped, which for an application is it closing
+    /// or moving to another device.
+    fn failed(&self) -> bool {
+        match self {
+            Source::Device(_) => false,
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd"
+            ))]
+            Source::App(capture) => capture.failed(),
+        }
+    }
+}
+
+/// How a setting says "this application" rather than "this device", since the
+/// menu and the config file have one row for either.
+pub const APP_PREFIX: &str = "app:";
+
+/// The application a setting names, if it names one at all.
+fn app_wanted(input: Option<&str>) -> Option<&str> {
+    input?.strip_prefix(APP_PREFIX)
+}
+
 /// A running passthrough. Dropping it stops the audio.
 pub struct Audio {
-    /// Held only to keep the streams alive; the callbacks do the work.
-    _input: Stream,
+    /// Held to keep the audio coming; the callbacks do the work.
+    input: Source,
     _output: Stream,
     failed: Arc<AtomicBool>,
     description: String,
@@ -68,27 +124,53 @@ pub struct Audio {
     /// settings have moved on and the passthrough has to be built again.
     wanted_input: Option<String>,
     wanted_output: Option<String>,
+    /// Whether the source was taken off this computer's own output.
+    exclusive: bool,
 }
 
 impl Audio {
     /// Starts one passthrough, which way round `leg` says.
     ///
-    /// `input` and `output` name the devices to use. `None` for either takes
-    /// the end `leg` would pick: the M8 on its side, the system default on
+    /// `input` and `output` name the devices to use, `input` naming an
+    /// application instead when it carries [`APP_PREFIX`]. `None` for either
+    /// takes the end `leg` would pick: the M8 on its side, the system default on
     /// this computer's.
-    pub fn start(leg: Leg, input: Option<&str>, output: Option<&str>) -> Result<Self, String> {
-        let inputs = input_candidates(leg, input);
-        if inputs.is_empty() {
-            return Err(match input {
-                Some(wanted) => format!("no audio input matching {wanted}"),
-                None => leg.missing("input"),
-            });
-        }
+    ///
+    /// `exclusive` asks for an application source to be heard through this
+    /// passthrough alone, rather than also straight out of this computer — which
+    /// is what stops it being heard twice when the M8 is played back here.
+    pub fn start(
+        leg: Leg,
+        input: Option<&str>,
+        output: Option<&str>,
+        exclusive: bool,
+    ) -> Result<Self, String> {
         let outputs = output_candidates(leg, output);
         if outputs.is_empty() {
             return Err(match output {
                 Some(wanted) => format!("no audio output matching {wanted}"),
                 None => leg.missing("output"),
+            });
+        }
+
+        // An application is not a device: the sound server picks its stream out
+        // of what a device is playing, so only the far end is cpal's.
+        if let Some(app) = app_wanted(input) {
+            let mut last_error = None;
+            for (out_device, out_host) in &outputs {
+                match Self::connect_app(app, out_device, *out_host, input, output, exclusive) {
+                    Ok(audio) => return Ok(audio),
+                    Err(e) => last_error = Some(e),
+                }
+            }
+            return Err(last_error.unwrap_or_else(|| format!("cannot pass {app} on")));
+        }
+
+        let inputs = input_candidates(leg, input);
+        if inputs.is_empty() {
+            return Err(match input {
+                Some(wanted) => format!("no audio input matching {wanted}"),
+                None => leg.missing("input"),
             });
         }
 
@@ -119,14 +201,163 @@ impl Audio {
     ) -> Result<Self, String> {
         let in_config = input_config(input)?;
         let rate = in_config.sample_rate();
+        let in_channels = in_config.channels() as usize;
+        let in_period = period(&in_config);
+
+        let failed = Arc::new(AtomicBool::new(false));
+        let (source, output_stream) = Self::assemble(
+            output,
+            rate,
+            in_channels,
+            in_period,
+            &failed,
+            |mut push, failed| {
+                build_input(
+                    input,
+                    &in_config,
+                    in_period,
+                    move |samples: &[f32]| push(samples),
+                    move |_| failed.store(true, Ordering::Relaxed),
+                )
+                .map(Source::Device)
+            },
+        )?;
+        let description = match hosts {
+            (in_host, out_host) if in_host == out_host => format!(
+                "{} to {} at {rate} Hz via {}",
+                name_of(input),
+                name_of(output),
+                in_host.name(),
+            ),
+            (in_host, out_host) => format!(
+                "{} via {} to {} via {} at {rate} Hz",
+                name_of(input),
+                in_host.name(),
+                name_of(output),
+                out_host.name(),
+            ),
+        };
+        Self::begin(
+            source,
+            output_stream,
+            failed,
+            description,
+            wanted_input,
+            wanted_output,
+            false,
+        )
+    }
+
+    /// One application into a device, the sound server doing the picking out.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd"
+    ))]
+    fn connect_app(
+        app: &str,
+        output: &Device,
+        out_host: HostId,
+        wanted_input: Option<&str>,
+        wanted_output: Option<&str>,
+        exclusive: bool,
+    ) -> Result<Self, String> {
+        let opened = crate::apps::open(app, PERIOD, exclusive)?;
+        let rate = opened.rate();
+        let in_channels = opened.channels();
+        let name = opened.app().to_string();
+
+        let failed = Arc::new(AtomicBool::new(false));
+        let (source, output_stream) = Self::assemble(
+            output,
+            rate,
+            in_channels,
+            // The server was asked for PERIOD-sized batches, same as a device.
+            None,
+            &failed,
+            |push, _| Ok(Source::App(opened.start(push))),
+        )?;
+        let description = format!(
+            "{name}{} to {} at {rate} Hz via {}",
+            if exclusive { " alone" } else { "" },
+            name_of(output),
+            out_host.name(),
+        );
+        Self::begin(
+            source,
+            output_stream,
+            failed,
+            description,
+            wanted_input,
+            wanted_output,
+            exclusive,
+        )
+    }
+
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd"
+    )))]
+    fn connect_app(
+        app: &str,
+        _output: &Device,
+        _out_host: HostId,
+        _wanted_input: Option<&str>,
+        _wanted_output: Option<&str>,
+        _exclusive: bool,
+    ) -> Result<Self, String> {
+        Err(format!(
+            "sending {app} on its own needs PulseAudio or PipeWire"
+        ))
+    }
+
+    /// Starts both ends and hands back the running passthrough.
+    #[allow(clippy::too_many_arguments)]
+    fn begin(
+        input: Source,
+        output: Stream,
+        failed: Arc<AtomicBool>,
+        description: String,
+        wanted_input: Option<&str>,
+        wanted_output: Option<&str>,
+        exclusive: bool,
+    ) -> Result<Self, String> {
+        input.play()?;
+        output
+            .play()
+            .map_err(|e| format!("cannot play audio: {e}"))?;
+        Ok(Self {
+            input,
+            _output: output,
+            failed,
+            description,
+            wanted_input: wanted_input.map(str::to_string),
+            wanted_output: wanted_output.map(str::to_string),
+            exclusive,
+        })
+    }
+
+    /// Everything the two kinds of source share: the ring that carries frames
+    /// between the two clocks, and the output stream that empties it.
+    ///
+    /// `source` is handed the push that fills the ring, and the flag to set if
+    /// it breaks.
+    fn assemble(
+        output: &Device,
+        rate: u32,
+        in_channels: usize,
+        in_period: Option<u32>,
+        failed: &Arc<AtomicBool>,
+        source: impl FnOnce(Box<dyn FnMut(&[f32]) + Send>, Arc<AtomicBool>) -> Result<Source, String>,
+    ) -> Result<(Source, Stream), String> {
         let out_config = output_config(output, rate)?;
 
         let frames = |duration: Duration| frames_at(rate, duration);
-        let in_channels = in_config.channels() as usize;
         let out_channels = out_config.channels() as usize;
         let out_rate = out_config.sample_rate();
-
-        let in_period = period(&in_config);
         let out_period = period(&out_config);
 
         // What one output callback eats, counted in input frames, plus the
@@ -143,24 +374,17 @@ impl Audio {
         let ring = HeapRb::<f32>::new(frames(CAPACITY).max(ceiling / CHANNELS * 2) * CHANNELS);
         let (mut producer, mut consumer) = ring.split();
 
-        let failed = Arc::new(AtomicBool::new(false));
-        let input_failed = Arc::clone(&failed);
-        let output_failed = Arc::clone(&failed);
+        let output_failed = Arc::clone(failed);
 
         let mut capture = move |frame: [f32; CHANNELS]| {
             let _ = producer.push_slice(&frame);
         };
-        let input_stream = build_input(
-            input,
-            &in_config,
-            in_period,
-            move |samples: &[f32]| {
-                for frame in samples.chunks(in_channels) {
-                    capture(widen(frame));
-                }
-            },
-            move |_| input_failed.store(true, Ordering::Relaxed),
-        )?;
+        let push = Box::new(move |samples: &[f32]| {
+            for frame in samples.chunks(in_channels) {
+                capture(widen(frame));
+            }
+        });
+        let source = source(push, Arc::clone(failed))?;
 
         let mut resampler = Resampler::new(rate, out_rate);
         let mut playing = false;
@@ -202,41 +426,12 @@ impl Audio {
             move |_| output_failed.store(true, Ordering::Relaxed),
         )?;
 
-        input_stream
-            .play()
-            .map_err(|e| format!("cannot start the M8 capture: {e}"))?;
-        output_stream
-            .play()
-            .map_err(|e| format!("cannot start audio output: {e}"))?;
-
-        let description = match hosts {
-            (in_host, out_host) if in_host == out_host => format!(
-                "{} to {} at {rate} Hz via {}",
-                name_of(input),
-                name_of(output),
-                in_host.name(),
-            ),
-            (in_host, out_host) => format!(
-                "{} via {} to {} via {} at {rate} Hz",
-                name_of(input),
-                in_host.name(),
-                name_of(output),
-                out_host.name(),
-            ),
-        };
-        Ok(Self {
-            _input: input_stream,
-            _output: output_stream,
-            failed,
-            description,
-            wanted_input: wanted_input.map(str::to_string),
-            wanted_output: wanted_output.map(str::to_string),
-        })
+        Ok((source, output_stream))
     }
 
-    /// True once either stream has failed.
+    /// True once either end has stopped.
     pub fn failed(&self) -> bool {
-        self.failed.load(Ordering::Relaxed)
+        self.failed.load(Ordering::Relaxed) || self.input.failed()
     }
 
     /// What is being played where, for the settings menu.
@@ -245,8 +440,10 @@ impl Audio {
     }
 
     /// True while this is the passthrough the settings are asking for.
-    pub fn wants(&self, input: Option<&str>, output: Option<&str>) -> bool {
-        self.wanted_input.as_deref() == input && self.wanted_output.as_deref() == output
+    pub fn wants(&self, input: Option<&str>, output: Option<&str>, exclusive: bool) -> bool {
+        self.wanted_input.as_deref() == input
+            && self.wanted_output.as_deref() == output
+            && self.exclusive == exclusive
     }
 }
 
@@ -258,6 +455,28 @@ pub fn inputs() -> Vec<String> {
     names.retain(|name| !name.to_lowercase().contains(MONITOR_NEEDLE));
     names.sort_by_key(|name| !name.to_lowercase().contains(DEVICE_NEEDLE));
     names
+}
+
+/// The applications playing audio, which can be sent in one at a time.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd"
+))]
+pub fn apps() -> Vec<String> {
+    crate::apps::playing()
+}
+
+/// No sound server to ask, so no applications to offer.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd"
+)))]
+pub fn apps() -> Vec<String> {
+    Vec::new()
 }
 
 /// Every device the M8 can be sent audio from.
@@ -281,38 +500,53 @@ pub fn outputs() -> Vec<String> {
 
 /// The capture devices to try, in the order to try them.
 fn input_candidates(leg: Leg, wanted: Option<&str>) -> Vec<(Device, HostId)> {
-    hosts()
-        .flat_map(|(host, id)| {
-            let devices = match (wanted, leg) {
-                (Some(wanted), _) => matching(host.input_devices().ok(), wanted),
-                (None, Leg::Play) => m8_devices(host.input_devices().ok()),
-                (None, Leg::Send) => host.default_input_device().into_iter().collect(),
-            };
-            devices.into_iter().map(move |device| (device, id))
-        })
-        .collect()
+    from_hosts(|host, id| {
+        let devices = match (wanted, leg) {
+            (Some(wanted), _) => matching(host.input_devices().ok(), wanted),
+            (None, Leg::Play) => m8_devices(host.input_devices().ok()),
+            (None, Leg::Send) => host.default_input_device().into_iter().collect(),
+        };
+        devices.into_iter().map(|device| (device, id)).collect()
+    })
 }
 
 /// The devices to try playing through, in the order to try them.
 fn output_candidates(leg: Leg, wanted: Option<&str>) -> Vec<(Device, HostId)> {
-    hosts()
-        .flat_map(|(host, id)| {
-            let devices = match (wanted, leg) {
-                (Some(wanted), _) => matching(host.output_devices().ok(), wanted),
-                (None, Leg::Play) => host.default_output_device().into_iter().collect(),
-                (None, Leg::Send) => m8_devices(host.output_devices().ok()),
-            };
-            devices.into_iter().map(move |device| (device, id))
-        })
-        .collect()
+    from_hosts(|host, id| {
+        let devices = match (wanted, leg) {
+            (Some(wanted), _) => matching(host.output_devices().ok(), wanted),
+            (None, Leg::Play) => host.default_output_device().into_iter().collect(),
+            (None, Leg::Send) => m8_devices(host.output_devices().ok()),
+        };
+        devices.into_iter().map(|device| (device, id)).collect()
+    })
 }
 
-/// Every host the build has, best first.
-fn hosts() -> impl Iterator<Item = (Host, HostId)> {
-    let mut ids = cpal::available_hosts();
-    ids.sort_by_key(|id| host_rank(id.name()));
-    ids.into_iter()
-        .filter_map(|id| Some((cpal::host_from_id(id).ok()?, id)))
+thread_local! {
+    /// Every host the build has, best first, made once and kept.
+    ///
+    /// A host has a connection to the sound server behind it, and a device
+    /// carries a share of that connection — so a device outliving the host it
+    /// came from strands the connection and the thread that serves it. Since the
+    /// lists below hand devices back to their callers, the hosts have to outlive
+    /// them, and a cpal host is meant to be long-lived anyway.
+    static HOSTS: Vec<(Host, HostId)> = {
+        let mut ids = cpal::available_hosts();
+        ids.sort_by_key(|id| host_rank(id.name()));
+        ids.into_iter()
+            .filter_map(|id| Some((cpal::host_from_id(id).ok()?, id)))
+            .collect()
+    };
+}
+
+/// Gathers what every host has to offer, best host first.
+fn from_hosts<T>(mut each: impl FnMut(&Host, HostId) -> Vec<T>) -> Vec<T> {
+    HOSTS.with(|hosts| {
+        hosts
+            .iter()
+            .flat_map(|(host, id)| each(host, *id))
+            .collect()
+    })
 }
 
 /// The devices every host offers, best host first and each name once.
@@ -322,15 +556,15 @@ fn hosts() -> impl Iterator<Item = (Host, HostId)> {
 /// looks a name up in again.
 fn device_names(list: impl Fn(&Host) -> Option<Vec<Device>>) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
-    for (host, _) in hosts() {
-        for device in list(&host).unwrap_or_default() {
-            let Ok(about) = device.description() else {
-                continue;
-            };
-            let name = about.name().to_string();
-            if !names.contains(&name) {
-                names.push(name);
-            }
+    for name in from_hosts(|host, _| {
+        list(host)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|device| Some(device.description().ok()?.name().to_string()))
+            .collect()
+    }) {
+        if !names.contains(&name) {
+            names.push(name);
         }
     }
     names

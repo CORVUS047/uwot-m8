@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::audio::{Audio, Leg};
+use crate::audio::{self, Audio, Leg};
 use crate::cc::{self, Engine};
 use crate::config::Config;
 use crate::midi;
@@ -38,11 +38,15 @@ impl Outputs {
             config.audio_send_input.as_deref(),
             config.audio_send_output.as_deref(),
         );
-        if Self::stale(&mut self.audio, config.audio, play_devices) {
+        // An application sent into the M8 is taken off this computer's own
+        // output while the M8 is played back here, or it would be heard twice:
+        // once straight from the application, once through the M8.
+        let exclusive = config.audio;
+        if Self::stale(&mut self.audio, config.audio, play_devices, false) {
             self.message = Some("audio device went away".into());
         }
-        if Self::stale(&mut self.send, config.audio_send, send_devices) {
-            self.message = Some("the device audio was being sent to went away".into());
+        if Self::stale(&mut self.send, config.audio_send, send_devices, exclusive) {
+            self.message = Some("what was being sent to the M8 went away".into());
         }
         if self.port.as_ref().is_some_and(|port| !port.is_open()) {
             self.port = None;
@@ -66,7 +70,7 @@ impl Outputs {
         self.last_retry = Some(Instant::now());
 
         if wants_audio {
-            match Audio::start(Leg::Play, play_devices.0, play_devices.1) {
+            match Audio::start(Leg::Play, play_devices.0, play_devices.1, false) {
                 Ok(audio) => {
                     self.message = None;
                     self.audio = Some(audio);
@@ -75,7 +79,7 @@ impl Outputs {
             }
         }
         if wants_send {
-            match Audio::start(Leg::Send, send_devices.0, send_devices.1) {
+            match Audio::start(Leg::Send, send_devices.0, send_devices.1, exclusive) {
                 Ok(audio) => {
                     self.message = None;
                     self.send = Some(audio);
@@ -133,13 +137,18 @@ impl Outputs {
 
     /// Drops a passthrough that has failed, been turned off, or had its devices
     /// changed under it, saying whether it was a failure that took it.
-    fn stale(leg: &mut Option<Audio>, wanted: bool, devices: (Option<&str>, Option<&str>)) -> bool {
+    fn stale(
+        leg: &mut Option<Audio>,
+        wanted: bool,
+        devices: (Option<&str>, Option<&str>),
+        exclusive: bool,
+    ) -> bool {
         let failed = leg.as_ref().is_some_and(Audio::failed);
         if failed
             || !wanted
             || leg
                 .as_ref()
-                .is_some_and(|audio| !audio.wants(devices.0, devices.1))
+                .is_some_and(|audio| !audio.wants(devices.0, devices.1, exclusive))
         {
             *leg = None;
         }
@@ -171,10 +180,9 @@ impl Outputs {
         if config.audio_send {
             match &self.send {
                 Some(send) => parts.push(format!("sending: {}", send.description())),
-                None => parts.push(format!(
-                    "sending: waiting for {}",
-                    config.audio_send_output.as_deref().unwrap_or("the M8")
-                )),
+                // What is missing is far more often the thing being sent than
+                // the M8, so name that when one was picked.
+                None => parts.push(format!("sending: waiting for {}", send_source(config))),
             }
         }
         if let Some(wanted) = &config.midi_port {
@@ -187,5 +195,13 @@ impl Outputs {
             parts.push(message.clone());
         }
         parts.join("   ")
+    }
+}
+
+/// What the send leg is listening to, named the way a person would.
+fn send_source(config: &Config) -> &str {
+    match &config.audio_send_input {
+        Some(name) => name.strip_prefix(audio::APP_PREFIX).unwrap_or(name),
+        None => config.audio_send_output.as_deref().unwrap_or("the M8"),
     }
 }
