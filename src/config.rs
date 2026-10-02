@@ -279,10 +279,12 @@ impl Changed {
 #[derive(Clone, Debug, Default)]
 pub struct MenuEnv {
     pub midi_ports: Vec<String>,
-    /// The capture devices the audio can be played from.
+    /// The capture devices the M8's audio can be played from.
     pub audio_inputs: Vec<String>,
-    /// The devices it can be played through.
+    /// The devices audio can be played through, either way round.
     pub audio_outputs: Vec<String>,
+    /// The devices audio can be sent into the M8 from.
+    pub audio_sources: Vec<String>,
 }
 
 /// How the control-change slots are named, in the menu and in the file.
@@ -305,6 +307,12 @@ pub enum Setting {
     AudioInput,
     /// The device it is played through.
     AudioOutput,
+    /// Send audio from this computer into the M8, or do not.
+    AudioSendOn,
+    /// The device that audio is taken from.
+    AudioSendInput,
+    /// The M8 device it is sent into.
+    AudioSendOutput,
     /// Opens the page of button bindings.
     Buttons,
     /// The key that presses a button.
@@ -367,6 +375,9 @@ impl Setting {
                 Setting::AudioOn,
                 Setting::AudioInput,
                 Setting::AudioOutput,
+                Setting::AudioSendOn,
+                Setting::AudioSendInput,
+                Setting::AudioSendOutput,
                 Setting::Back,
             ]),
             Setting::Midi => {
@@ -399,8 +410,11 @@ impl Setting {
             Setting::ColorDepth => "Colours",
             Setting::Audio => "Audio",
             Setting::AudioOn => "Play",
-            Setting::AudioInput => "From",
-            Setting::AudioOutput => "To",
+            Setting::AudioInput => "Play from",
+            Setting::AudioOutput => "Play to",
+            Setting::AudioSendOn => "Send",
+            Setting::AudioSendInput => "Send from",
+            Setting::AudioSendOutput => "Send into",
             Setting::Buttons => "Buttons",
             Setting::Key(button) => button.label(),
             Setting::ResetKeys => "Reset keys",
@@ -453,6 +467,13 @@ pub struct Config {
     pub audio_input: Option<String>,
     /// The device it is played through, by name. `None` uses the default.
     pub audio_output: Option<String>,
+    /// Send audio from this computer into the M8's USB audio input.
+    pub audio_send: bool,
+    /// The device that audio is taken from, by name. `None` uses this
+    /// computer's default input.
+    pub audio_send_input: Option<String>,
+    /// The M8 device it is sent into, by name. `None` finds the M8 by name.
+    pub audio_send_output: Option<String>,
     /// The MIDI output the control-change bindings send to, by name.
     pub midi_port: Option<String>,
     pub bindings: Bindings,
@@ -469,6 +490,9 @@ impl Default for Config {
             audio: false,
             audio_input: None,
             audio_output: None,
+            audio_send: false,
+            audio_send_input: None,
+            audio_send_output: None,
             midi_port: None,
             bindings: Bindings::default(),
             cc: vec![Binding::default(); cc::SLOTS],
@@ -503,6 +527,29 @@ impl fmt::Display for Config {
         writeln!(f, "# for this computer's default. Part of a name will do.")?;
         writeln!(f, "audio_input = {}", name_or_none(&self.audio_input))?;
         writeln!(f, "audio_output = {}", name_or_none(&self.audio_output))?;
+        writeln!(
+            f,
+            "# audio_send: play a device here into the M8's USB audio input."
+        )?;
+        writeln!(
+            f,
+            "# audio_send_input: what to send, or none for this computer's default"
+        )?;
+        writeln!(
+            f,
+            "# input; audio_send_output: which M8 device, or none to find it by name."
+        )?;
+        writeln!(f, "audio_send = {}", self.audio_send)?;
+        writeln!(
+            f,
+            "audio_send_input = {}",
+            name_or_none(&self.audio_send_input)
+        )?;
+        writeln!(
+            f,
+            "audio_send_output = {}",
+            name_or_none(&self.audio_send_output)
+        )?;
         writeln!(f)?;
         writeln!(
             f,
@@ -703,6 +750,13 @@ impl Config {
                 }
                 "audio_input" => config.audio_input = parse_device(value),
                 "audio_output" => config.audio_output = parse_device(value),
+                "audio_send" => match value {
+                    "true" => config.audio_send = true,
+                    "false" => config.audio_send = false,
+                    _ => {}
+                },
+                "audio_send_input" => config.audio_send_input = parse_device(value),
+                "audio_send_output" => config.audio_send_output = parse_device(value),
                 "midi_port" => {
                     config.midi_port = match value {
                         "" | "none" => None,
@@ -780,7 +834,13 @@ impl Config {
             }
             Setting::Theme => self.theme.label().into(),
             Setting::ColorDepth => self.color_depth.label().into(),
-            Setting::Audio | Setting::AudioOn => if self.audio { "on" } else { "off" }.into(),
+            Setting::Audio => match (self.audio, self.audio_send) {
+                (true, true) => "play, send".into(),
+                (true, false) => "play".into(),
+                (false, true) => "send".into(),
+                (false, false) => "off".into(),
+            },
+            Setting::AudioOn => if self.audio { "on" } else { "off" }.into(),
             Setting::AudioInput => match &self.audio_input {
                 Some(name) => name.clone(),
                 None => "the M8".into(),
@@ -788,6 +848,15 @@ impl Config {
             Setting::AudioOutput => match &self.audio_output {
                 Some(name) => name.clone(),
                 None => "default".into(),
+            },
+            Setting::AudioSendOn => if self.audio_send { "on" } else { "off" }.into(),
+            Setting::AudioSendInput => match &self.audio_send_input {
+                Some(name) => name.clone(),
+                None => "default".into(),
+            },
+            Setting::AudioSendOutput => match &self.audio_send_output {
+                Some(name) => name.clone(),
+                None => "the M8".into(),
             },
             Setting::Buttons => ">".into(),
             Setting::Key(button) => self.bindings.keys(button),
@@ -859,6 +928,26 @@ impl Config {
             Setting::AudioOutput => {
                 self.audio_output =
                     next_port(self.audio_output.as_deref(), &env.audio_outputs, forwards);
+                Changed::audio()
+            }
+            Setting::AudioSendOn => {
+                self.audio_send = !self.audio_send;
+                Changed::audio()
+            }
+            Setting::AudioSendInput => {
+                self.audio_send_input = next_port(
+                    self.audio_send_input.as_deref(),
+                    &env.audio_sources,
+                    forwards,
+                );
+                Changed::audio()
+            }
+            Setting::AudioSendOutput => {
+                self.audio_send_output = next_port(
+                    self.audio_send_output.as_deref(),
+                    &env.audio_outputs,
+                    forwards,
+                );
                 Changed::audio()
             }
             Setting::MidiPort => {
@@ -1181,15 +1270,52 @@ mod tests {
             audio: true,
             audio_input: Some("M8 Analog Stereo".into()),
             audio_output: Some("Headphones".into()),
+            audio_send: true,
+            audio_send_input: Some("Monitor of Headphones".into()),
+            audio_send_output: Some("M8, USB Audio".into()),
             ..Config::default()
         };
         let read_back = Config::parse(&config.to_string());
-        assert_eq!(read_back.audio_input.as_deref(), Some("M8 Analog Stereo"));
-        assert_eq!(read_back.audio_output.as_deref(), Some("Headphones"));
+        assert_eq!(read_back, config);
 
         let automatic = Config::parse(&Config::default().to_string());
-        assert_eq!(automatic.audio_input, None);
-        assert_eq!(automatic.audio_output, None);
+        assert_eq!(automatic, Config::default());
+    }
+
+    #[test]
+    fn the_two_directions_are_turned_on_and_off_apart() {
+        let mut config = Config::default();
+        assert_eq!(config.value(Setting::Audio), "off");
+
+        config.adjust(Setting::AudioSendOn, 1, &MenuEnv::default());
+        assert!(config.audio_send);
+        assert!(!config.audio);
+        assert_eq!(config.value(Setting::Audio), "send");
+
+        config.adjust(Setting::AudioOn, 1, &MenuEnv::default());
+        assert_eq!(config.value(Setting::Audio), "play, send");
+    }
+
+    #[test]
+    fn the_send_rows_cycle_through_the_sources_and_the_outputs() {
+        let env = MenuEnv {
+            audio_sources: vec!["Monitor of Headphones".into()],
+            audio_outputs: vec!["M8, USB Audio".into()],
+            ..MenuEnv::default()
+        };
+        let mut config = Config::default();
+        assert_eq!(
+            config.adjust(Setting::AudioSendInput, 1, &env),
+            Changed::audio()
+        );
+        assert_eq!(
+            config.audio_send_input.as_deref(),
+            Some("Monitor of Headphones")
+        );
+        config.adjust(Setting::AudioSendOutput, 1, &env);
+        assert_eq!(config.audio_send_output.as_deref(), Some("M8, USB Audio"));
+        config.adjust(Setting::AudioSendOutput, 1, &env);
+        assert_eq!(config.audio_send_output, None);
     }
 
     #[test]

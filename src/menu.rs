@@ -446,17 +446,30 @@ mod tests {
     }
 
     #[test]
-    fn the_audio_page_lists_the_switch_and_both_devices() {
+    fn the_audio_page_lists_both_directions_and_their_devices() {
         let (mut menu, mut config, env) = open();
         select(&mut menu, &mut config, &env, Setting::Audio);
         menu.handle(Action::Activate, &mut config, &env);
         assert_eq!(menu.title(), "Audio");
         let items = menu.items(&config);
         let labels: Vec<&str> = items.iter().map(|(label, _)| label.as_str()).collect();
-        assert_eq!(labels, ["Play", "From", "To", "Back"]);
-        assert_eq!(items[0].1, "off");
-        assert_eq!(items[1].1, "the M8");
-        assert_eq!(items[2].1, "default");
+        assert_eq!(
+            labels,
+            [
+                "Play",
+                "Play from",
+                "Play to",
+                "Send",
+                "Send from",
+                "Send into",
+                "Back"
+            ]
+        );
+        let values: Vec<&str> = items.iter().map(|(_, value)| value.as_str()).collect();
+        assert_eq!(
+            values[..6],
+            ["off", "the M8", "default", "off", "default", "the M8"]
+        );
     }
 
     #[test]

@@ -6,24 +6,46 @@ use std::time::{Duration, Instant};
 use uwot_m8::cc::{Binding, Curve, Shape, Trigger};
 use uwot_m8::{audio, cc, font, m8, midi, pad, proto};
 
-/// Plays the M8's audio, which is the only real test of the passthrough.
-fn play_audio(seconds: u64, input: Option<&str>, output: Option<&str>) -> Result<(), String> {
-    let audio = audio::Audio::start(input, output)?;
-    println!("playing {}", audio.description());
+/// Runs the passthrough, which is the only real test of it. Both legs at once
+/// where both were asked for, since that is how they are usually run.
+fn play_audio(
+    seconds: u64,
+    legs: &[(audio::Leg, Option<&str>, Option<&str>)],
+) -> Result<(), String> {
+    let running: Vec<audio::Audio> = legs
+        .iter()
+        .map(|(leg, input, output)| {
+            let audio = audio::Audio::start(*leg, *input, *output)?;
+            println!(
+                "{} {}",
+                match leg {
+                    audio::Leg::Play => "playing",
+                    audio::Leg::Send => "sending",
+                },
+                audio.description()
+            );
+            Ok(audio)
+        })
+        .collect::<Result<_, String>>()?;
+
     let deadline = Instant::now() + Duration::from_secs(seconds);
     while Instant::now() < deadline {
-        if audio.failed() {
+        if running.iter().any(audio::Audio::failed) {
             return Err("the audio stream stopped".into());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    println!("played for {seconds}s without a fault");
+    println!("ran for {seconds}s without a fault");
     Ok(())
 }
 
 /// Names the devices the audio passthrough can be pointed at.
 fn list_audio() -> Result<(), String> {
-    for (what, names) in [("in ", audio::inputs()), ("out", audio::outputs())] {
+    for (what, names) in [
+        ("in  ", audio::inputs()),
+        ("out ", audio::outputs()),
+        ("send", audio::sources()),
+    ] {
         if names.is_empty() {
             println!("{what}  (none)");
         }
@@ -122,9 +144,12 @@ fn main() -> Result<(), String> {
     let mut trace_mode = false;
     let mut ink_mode = false;
     let mut audio_mode = false;
+    let mut send_mode = false;
     let mut audio_devices = false;
     let mut audio_input: Option<String> = None;
     let mut audio_output: Option<String> = None;
+    let mut send_input: Option<String> = None;
+    let mut send_output: Option<String> = None;
     let mut midi_mode = false;
     let mut pad_mode = false;
     let mut cc_port: Option<String> = None;
@@ -138,6 +163,15 @@ fn main() -> Result<(), String> {
             "--ink" => ink_mode = true,
             "--audio" => audio_mode = true,
             "--audio-devices" => audio_devices = true,
+            "--audio-send" => send_mode = true,
+            "--send-from" => {
+                send_input = Some(args.next().ok_or("--send-from needs a device name")?);
+                send_mode = true;
+            }
+            "--send-into" => {
+                send_output = Some(args.next().ok_or("--send-into needs a device name")?);
+                send_mode = true;
+            }
             "--audio-in" => {
                 audio_input = Some(args.next().ok_or("--audio-in needs a device name")?);
                 audio_mode = true;
@@ -155,8 +189,23 @@ fn main() -> Result<(), String> {
     if audio_devices {
         return list_audio();
     }
-    if audio_mode {
-        return play_audio(seconds, audio_input.as_deref(), audio_output.as_deref());
+    if audio_mode || send_mode {
+        let mut legs = Vec::new();
+        if audio_mode {
+            legs.push((
+                audio::Leg::Play,
+                audio_input.as_deref(),
+                audio_output.as_deref(),
+            ));
+        }
+        if send_mode {
+            legs.push((
+                audio::Leg::Send,
+                send_input.as_deref(),
+                send_output.as_deref(),
+            ));
+        }
+        return play_audio(seconds, &legs);
     }
     if midi_mode {
         return list_midi();

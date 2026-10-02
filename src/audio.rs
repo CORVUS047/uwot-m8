@@ -1,4 +1,5 @@
-//! Playing the M8's audio through the computer's own output.
+//! Passing audio between the M8 and the computer: the M8's own output played
+//! here, and a device here played into the M8's USB audio input.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -33,6 +34,29 @@ const CAPACITY: Duration = Duration::from_millis(500);
 /// So a wedged audio server cannot hang the app.
 const BUILD_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Which way a passthrough runs, which is what the ends default to.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Leg {
+    /// The M8 heard here: from the M8's capture device to this computer's
+    /// default output.
+    Play,
+    /// This computer heard on the M8: from its default input into the M8's own
+    /// playback device, which is the M8's USB audio input.
+    Send,
+}
+
+impl Leg {
+    /// What to call the end a name was not found for.
+    fn missing(self, end: &str) -> String {
+        match (self, end) {
+            (Leg::Play, "input") => "no M8 audio device; is the M8 plugged in?".into(),
+            (Leg::Play, _) => "this computer has no audio output".into(),
+            (Leg::Send, "input") => "this computer has no audio input".into(),
+            (Leg::Send, _) => "no M8 to send audio into; is it plugged in?".into(),
+        }
+    }
+}
+
 /// A running passthrough. Dropping it stops the audio.
 pub struct Audio {
     /// Held only to keep the streams alive; the callbacks do the work.
@@ -47,24 +71,24 @@ pub struct Audio {
 }
 
 impl Audio {
-    /// Starts playing the M8's audio through this computer's output.
+    /// Starts one passthrough, which way round `leg` says.
     ///
-    /// `input` and `output` name the devices to use. `None` for either picks
-    /// one: the M8's own capture device by name, and the system's default
-    /// output.
-    pub fn start(input: Option<&str>, output: Option<&str>) -> Result<Self, String> {
-        let inputs = input_candidates(input);
+    /// `input` and `output` name the devices to use. `None` for either takes
+    /// the end `leg` would pick: the M8 on its side, the system default on
+    /// this computer's.
+    pub fn start(leg: Leg, input: Option<&str>, output: Option<&str>) -> Result<Self, String> {
+        let inputs = input_candidates(leg, input);
         if inputs.is_empty() {
             return Err(match input {
                 Some(wanted) => format!("no audio input matching {wanted}"),
-                None => "no M8 audio device; is the M8 plugged in?".into(),
+                None => leg.missing("input"),
             });
         }
-        let outputs = output_candidates(output);
+        let outputs = output_candidates(leg, output);
         if outputs.is_empty() {
             return Err(match output {
                 Some(wanted) => format!("no audio output matching {wanted}"),
-                None => "this computer has no audio output".into(),
+                None => leg.missing("output"),
             });
         }
 
@@ -80,7 +104,10 @@ impl Audio {
                 }
             }
         }
-        Err(last_error.unwrap_or_else(|| "cannot play the M8's audio".into()))
+        Err(last_error.unwrap_or_else(|| match leg {
+            Leg::Play => "cannot play the M8's audio".into(),
+            Leg::Send => "cannot send audio to the M8".into(),
+        }))
     }
 
     fn connect(
@@ -233,18 +260,33 @@ pub fn inputs() -> Vec<String> {
     names
 }
 
-/// Every device the computer can play through.
+/// Every device the M8 can be sent audio from.
+///
+/// Monitors are kept here, unlike [`inputs`]: a monitor is what this computer is
+/// playing, which is the way to send another application into the M8. The M8's
+/// own are dropped, since sending the M8 into itself is a feedback loop.
+pub fn sources() -> Vec<String> {
+    let mut names = device_names(|host| host.input_devices().ok().map(Iterator::collect));
+    names.retain(|name| !name.to_lowercase().contains(DEVICE_NEEDLE));
+    names
+}
+
+/// Every device the computer can play through, the M8's own first so the row
+/// that sends into it has it to hand.
 pub fn outputs() -> Vec<String> {
-    device_names(|host| host.output_devices().ok().map(Iterator::collect))
+    let mut names = device_names(|host| host.output_devices().ok().map(Iterator::collect));
+    names.sort_by_key(|name| !name.to_lowercase().contains(DEVICE_NEEDLE));
+    names
 }
 
 /// The capture devices to try, in the order to try them.
-fn input_candidates(wanted: Option<&str>) -> Vec<(Device, HostId)> {
+fn input_candidates(leg: Leg, wanted: Option<&str>) -> Vec<(Device, HostId)> {
     hosts()
         .flat_map(|(host, id)| {
-            let devices = match wanted {
-                Some(wanted) => matching(host.input_devices().ok(), wanted),
-                None => m8_inputs(&host),
+            let devices = match (wanted, leg) {
+                (Some(wanted), _) => matching(host.input_devices().ok(), wanted),
+                (None, Leg::Play) => m8_devices(host.input_devices().ok()),
+                (None, Leg::Send) => host.default_input_device().into_iter().collect(),
             };
             devices.into_iter().map(move |device| (device, id))
         })
@@ -252,12 +294,13 @@ fn input_candidates(wanted: Option<&str>) -> Vec<(Device, HostId)> {
 }
 
 /// The devices to try playing through, in the order to try them.
-fn output_candidates(wanted: Option<&str>) -> Vec<(Device, HostId)> {
+fn output_candidates(leg: Leg, wanted: Option<&str>) -> Vec<(Device, HostId)> {
     hosts()
         .flat_map(|(host, id)| {
-            let devices = match wanted {
-                Some(wanted) => matching(host.output_devices().ok(), wanted),
-                None => host.default_output_device().into_iter().collect(),
+            let devices = match (wanted, leg) {
+                (Some(wanted), _) => matching(host.output_devices().ok(), wanted),
+                (None, Leg::Play) => host.default_output_device().into_iter().collect(),
+                (None, Leg::Send) => m8_devices(host.output_devices().ok()),
             };
             devices.into_iter().map(move |device| (device, id))
         })
@@ -330,12 +373,13 @@ fn loosely_matches(name: &str, wanted: &str) -> bool {
     name.contains(&wanted)
 }
 
-/// The M8's capture devices on one host, monitors left out.
-fn m8_inputs(host: &Host) -> Vec<Device> {
-    let Ok(inputs) = host.input_devices() else {
+/// The M8's own devices among those given, monitors left out: a monitor of the
+/// M8 is this computer playing it back, not the M8 itself.
+fn m8_devices(devices: Option<impl Iterator<Item = Device>>) -> Vec<Device> {
+    let Some(devices) = devices else {
         return Vec::new();
     };
-    inputs
+    devices
         .filter(|device| {
             let Ok(about) = device.description() else {
                 return false;

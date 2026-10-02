@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::audio::Audio;
+use crate::audio::{Audio, Leg};
 use crate::cc::{self, Engine};
 use crate::config::Config;
 use crate::midi;
@@ -14,6 +14,8 @@ const RETRY: Duration = Duration::from_secs(1);
 #[derive(Default)]
 pub struct Outputs {
     audio: Option<Audio>,
+    /// The other way round: a device here played into the M8.
+    send: Option<Audio>,
     port: Option<midi::Port>,
     engine: Engine,
     /// What went wrong last, for the settings menu to show.
@@ -28,24 +30,19 @@ impl Outputs {
 
     /// Brings the audio and the MIDI port into line with the settings.
     pub fn sync(&mut self, config: &Config) {
-        if self.audio.as_ref().is_some_and(Audio::failed) {
-            self.audio = None;
+        let play_devices = (
+            config.audio_input.as_deref(),
+            config.audio_output.as_deref(),
+        );
+        let send_devices = (
+            config.audio_send_input.as_deref(),
+            config.audio_send_output.as_deref(),
+        );
+        if Self::stale(&mut self.audio, config.audio, play_devices) {
             self.message = Some("audio device went away".into());
         }
-        if !config.audio {
-            self.audio = None;
-        }
-        let wanted_input = config.audio_input.as_deref();
-        let wanted_output = config.audio_output.as_deref();
-        if self
-            .audio
-            .as_ref()
-            .is_some_and(|audio| !audio.wants(wanted_input, wanted_output))
-        {
-            // The devices the settings ask for have changed, so the running
-            // passthrough has to go before the new one can have them.
-            self.audio = None;
-            self.last_retry = None;
+        if Self::stale(&mut self.send, config.audio_send, send_devices) {
+            self.message = Some("the device audio was being sent to went away".into());
         }
         if self.port.as_ref().is_some_and(|port| !port.is_open()) {
             self.port = None;
@@ -58,8 +55,9 @@ impl Outputs {
         }
 
         let wants_audio = config.audio && self.audio.is_none();
+        let wants_send = config.audio_send && self.send.is_none();
         let wants_midi = config.midi_port.is_some() && self.port.is_none();
-        if !wants_audio && !wants_midi {
+        if !wants_audio && !wants_send && !wants_midi {
             return;
         }
         if self.last_retry.is_some_and(|at| at.elapsed() < RETRY) {
@@ -68,10 +66,19 @@ impl Outputs {
         self.last_retry = Some(Instant::now());
 
         if wants_audio {
-            match Audio::start(wanted_input, wanted_output) {
+            match Audio::start(Leg::Play, play_devices.0, play_devices.1) {
                 Ok(audio) => {
                     self.message = None;
                     self.audio = Some(audio);
+                }
+                Err(e) => self.message = Some(e),
+            }
+        }
+        if wants_send {
+            match Audio::start(Leg::Send, send_devices.0, send_devices.1) {
+                Ok(audio) => {
+                    self.message = None;
+                    self.send = Some(audio);
                 }
                 Err(e) => self.message = Some(e),
             }
@@ -124,6 +131,21 @@ impl Outputs {
         }
     }
 
+    /// Drops a passthrough that has failed, been turned off, or had its devices
+    /// changed under it, saying whether it was a failure that took it.
+    fn stale(leg: &mut Option<Audio>, wanted: bool, devices: (Option<&str>, Option<&str>)) -> bool {
+        let failed = leg.as_ref().is_some_and(Audio::failed);
+        if failed
+            || !wanted
+            || leg
+                .as_ref()
+                .is_some_and(|audio| !audio.wants(devices.0, devices.1))
+        {
+            *leg = None;
+        }
+        failed
+    }
+
     fn send(&mut self, message: Option<cc::Message>) {
         let Some(message) = message else { return };
         let Some(port) = self.port.as_mut() else {
@@ -143,6 +165,15 @@ impl Outputs {
                 None => parts.push(format!(
                     "audio: waiting for {}",
                     config.audio_input.as_deref().unwrap_or("the M8")
+                )),
+            }
+        }
+        if config.audio_send {
+            match &self.send {
+                Some(send) => parts.push(format!("sending: {}", send.description())),
+                None => parts.push(format!(
+                    "sending: waiting for {}",
+                    config.audio_send_output.as_deref().unwrap_or("the M8")
                 )),
             }
         }

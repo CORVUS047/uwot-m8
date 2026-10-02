@@ -400,6 +400,7 @@ fn run(options: Options) -> Result<(), String> {
                         midi_ports: midi::ports(),
                         audio_inputs: audio::inputs(),
                         audio_outputs: audio::outputs(),
+                        audio_sources: audio::sources(),
                     };
                     menu = Some(Menu::new(Setting::window()));
                     overlay_stale = true;

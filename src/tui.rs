@@ -384,6 +384,7 @@ impl App {
                     midi_ports: midi::ports(),
                     audio_inputs: audio::inputs(),
                     audio_outputs: audio::outputs(),
+                    audio_sources: audio::sources(),
                 };
                 self.menu = Some(Menu::new(Setting::terminal()));
                 self.repaint = true;
